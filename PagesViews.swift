@@ -22,6 +22,7 @@ struct PagesProject: Decodable, Identifiable, Hashable {
 
 struct PagesView: View {
     @EnvironmentObject var session: Session
+    @State private var deploying = false
 
     var body: some View {
         let ctx = session.ctx
@@ -40,9 +41,17 @@ struct PagesView: View {
             }
             .overlay { if projects.isEmpty { EmptyHint(text: "没有 Pages 项目") } }
             .refreshable { await reload() }
-            .navigationDestination(for: PagesProject.self) { PagesDeploymentsView(project: $0) }
+            .navigationDestination(for: PagesProject.self) { PagesProjectView(project: $0) }
+            .sheet(isPresented: $deploying) {
+                PagesDeployView(projectName: "", fixedProject: false) { Task { await reload() } }
+            }
         }
         .navigationTitle("Pages")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { deploying = true } label: { Label("部署", systemImage: "plus") }
+            }
+        }
     }
 }
 
@@ -50,6 +59,7 @@ struct PagesDeploymentsView: View {
     @EnvironmentObject var session: Session
     let project: PagesProject
     @State private var error: String?
+    @State private var deploying = false
 
     var body: some View {
         let ctx = session.ctx
@@ -112,8 +122,16 @@ struct PagesDeploymentsView: View {
             }
             .overlay { if deployments.isEmpty { EmptyHint(text: "没有部署记录") } }
             .refreshable { await reload() }
+            .sheet(isPresented: $deploying) {
+                PagesDeployView(projectName: pname, fixedProject: true) { Task { await reload() } }
+            }
         }
         .navigationTitle(project.name)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { deploying = true } label: { Label("新部署", systemImage: "arrow.up.circle") }
+            }
+        }
         .errorAlert($error)
     }
 }

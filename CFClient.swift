@@ -121,17 +121,21 @@ final class CFClient {
     }
 
     private func makeRequest(_ method: String, _ path: String, query: [String: String],
-                             body: Data?, contentType: String?) -> URLRequest {
+                             body: Data?, contentType: String?, bearer: String? = nil) -> URLRequest {
         var comps = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { comps.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
         var req = URLRequest(url: comps.url!)
         req.httpMethod = method
-        switch creds.mode {
-        case .token:
-            req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
-        case .globalKey:
-            req.setValue(creds.email, forHTTPHeaderField: "X-Auth-Email")
-            req.setValue(creds.globalKey, forHTTPHeaderField: "X-Auth-Key")
+        if let bearer {
+            req.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        } else {
+            switch creds.mode {
+            case .token:
+                req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
+            case .globalKey:
+                req.setValue(creds.email, forHTTPHeaderField: "X-Auth-Email")
+                req.setValue(creds.globalKey, forHTTPHeaderField: "X-Auth-Key")
+            }
         }
         if let body {
             req.httpBody = body
@@ -142,8 +146,8 @@ final class CFClient {
 
     /// 返回原始响应体（脚本内容、KV 值等非 JSON 响应）
     func raw(_ method: String = "GET", _ path: String, query: [String: String] = [:],
-             body: Data? = nil, contentType: String? = nil) async throws -> Data {
-        let req = makeRequest(method, path, query: query, body: body, contentType: contentType)
+             body: Data? = nil, contentType: String? = nil, bearer: String? = nil) async throws -> Data {
+        let req = makeRequest(method, path, query: query, body: body, contentType: contentType, bearer: bearer)
         let (data, resp) = try await session.data(for: req)
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             if let env = try? JSONDecoder().decode(CFEnvelope<JSONValue>.self, from: data),
@@ -200,7 +204,8 @@ func buildMultipart(_ parts: [MultipartPart]) -> (body: Data, contentType: Strin
         var disp = "Content-Disposition: form-data; name=\"\(p.name)\""
         if let f = p.filename { disp += "; filename=\"\(f)\"" }
         body.append("\(disp)\r\n".data(using: .utf8)!)
-        body.append("Content-Type: \(p.contentType)\r\n\r\n".data(using: .utf8)!)
+        if !p.contentType.isEmpty { body.append("Content-Type: \(p.contentType)\r\n".data(using: .utf8)!) }
+        body.append("\r\n".data(using: .utf8)!)
         body.append(p.data)
         body.append("\r\n".data(using: .utf8)!)
     }
@@ -248,5 +253,56 @@ final class Session: ObservableObject {
         client = nil
         accounts = []
         accountId = ""
+    }
+}
+
+
+// MARK: - 扩展：计数 / GraphQL / JSON 取值
+
+extension CFClient {
+    /// 只取 result_info.total_count，不拉完整列表
+    func totalCount(_ path: String, query: [String: String] = [:]) async throws -> Int {
+        struct Env: Decodable {
+            struct Info: Decodable { let total_count: Int? }
+            let result_info: Info?
+        }
+        var q = query
+        q["per_page"] = "5"
+        let data = try await raw("GET", path, query: q)
+        return try JSONDecoder().decode(Env.self, from: data).result_info?.total_count ?? 0
+    }
+
+    /// Cloudflare GraphQL Analytics
+    func graphql(_ query: String, variables: [String: String]) async throws -> JSONValue {
+        struct Body: Encodable { let query: String; let variables: [String: String] }
+        let body = try JSONEncoder().encode(Body(query: query, variables: variables))
+        let data = try await raw("POST", "graphql", body: body)
+        let v = try JSONDecoder().decode(JSONValue.self, from: data)
+        if let errs = v["errors"]?.array, let first = errs.first {
+            throw CFClientError.message(first["message"]?.description ?? "GraphQL 查询失败")
+        }
+        return v
+    }
+}
+
+extension JSONValue {
+    subscript(key: String) -> JSONValue? {
+        if case .object(let o) = self { return o[key] }
+        return nil
+    }
+    subscript(index: Int) -> JSONValue? {
+        if case .array(let a) = self, a.indices.contains(index) { return a[index] }
+        return nil
+    }
+    var array: [JSONValue] {
+        if case .array(let a) = self { return a }
+        return []
+    }
+    var number: Double {
+        switch self {
+        case .int(let i): return Double(i)
+        case .double(let d): return d
+        default: return 0
+        }
     }
 }

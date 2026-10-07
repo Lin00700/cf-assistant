@@ -74,18 +74,30 @@ struct RootView: View {
 
     var body: some View {
         TabView {
+            NavigationStack { OverviewView() }
+                .tabItem { Label("概览", systemImage: "square.grid.2x2.fill") }
             NavigationStack { ZonesView() }
                 .tabItem { Label("域名", systemImage: "globe") }
-            NavigationStack { WorkersView() }
-                .tabItem { Label("Workers", systemImage: "bolt.fill") }
-            NavigationStack { PagesView() }
-                .tabItem { Label("Pages", systemImage: "doc.richtext") }
+            NavigationStack { DeveloperView() }
+                .tabItem { Label("开发者", systemImage: "chevron.left.forwardslash.chevron.right") }
             NavigationStack { StorageView() }
-                .tabItem { Label("存储", systemImage: "externaldrive") }
+                .tabItem { Label("存储", systemImage: "externaldrive.fill") }
             NavigationStack { MoreView() }
-                .tabItem { Label("更多", systemImage: "ellipsis.circle") }
+                .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
+        .tint(.orange)
         .id(session.accountId)   // 切换账户时重建所有页面
+    }
+}
+
+struct DeveloperView: View {
+    var body: some View {
+        List {
+            NavigationLink { WorkersView() } label: { Label("Workers", systemImage: "bolt.fill") }
+            NavigationLink { PagesView() } label: { Label("Pages", systemImage: "doc.richtext.fill") }
+            NavigationLink { TunnelsView() } label: { Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted") }
+        }
+        .navigationTitle("开发者")
     }
 }
 
@@ -94,9 +106,6 @@ struct MoreView: View {
 
     var body: some View {
         List {
-            Section("Zero Trust") {
-                NavigationLink("Tunnels 隧道") { TunnelsView() }
-            }
             Section("账户") {
                 if session.accounts.count > 1 {
                     Picker("当前账户", selection: $session.accountId) {
@@ -108,6 +117,6 @@ struct MoreView: View {
                 Button("退出登录", role: .destructive) { session.logout() }
             }
         }
-        .navigationTitle("更多")
+        .navigationTitle("设置")
     }
 }

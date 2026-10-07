@@ -1,9 +1,12 @@
 import SwiftUI
 
+struct ZonePlan: Decodable, Hashable { let name: String? }
+
 struct Zone: Decodable, Identifiable, Hashable {
     let id: String
     let name: String
     let status: String?
+    let plan: ZonePlan?
 }
 
 struct DNSRecord: Decodable, Identifiable {

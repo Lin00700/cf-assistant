@@ -6,6 +6,75 @@ struct WorkerScript: Decodable, Identifiable, Hashable {
     let created_on: String?
 }
 
+struct WorkerSubdomain: Decodable { let subdomain: String? }
+
+// MARK: - 模板
+
+enum WorkerTemplate: String, CaseIterable, Identifiable {
+    case helloWorld, json, redirect, blank
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .helloWorld: return "Start with Hello World!"
+        case .json: return "返回 JSON"
+        case .redirect: return "重定向"
+        case .blank: return "空白"
+        }
+    }
+
+    var defaultName: String {
+        switch self {
+        case .helloWorld: return "hello-world"
+        case .json: return "json-api"
+        case .redirect: return "redirect"
+        case .blank: return "my-worker"
+        }
+    }
+
+    var code: String {
+        switch self {
+        case .helloWorld:
+            return """
+            export default {
+              async fetch(request, env, ctx) {
+                return new Response("Hello World!");
+              },
+            };
+            """
+        case .json:
+            return """
+            export default {
+              async fetch(request, env, ctx) {
+                return Response.json({
+                  message: "Hello from Cloudflare Workers",
+                  time: new Date().toISOString(),
+                });
+              },
+            };
+            """
+        case .redirect:
+            return """
+            export default {
+              async fetch(request, env, ctx) {
+                return Response.redirect("https://example.com", 302);
+              },
+            };
+            """
+        case .blank:
+            return """
+            export default {
+              async fetch(request, env, ctx) {
+                return new Response("");
+              },
+            };
+            """
+        }
+    }
+}
+
+// MARK: - 列表
+
 struct WorkersView: View {
     @EnvironmentObject var session: Session
     @State private var error: String?
@@ -19,7 +88,7 @@ struct WorkersView: View {
             List {
                 ForEach(scripts) { s in
                     NavigationLink {
-                        WorkerEditorView(name: s.id, isNew: false) { Task { await reload() } }
+                        WorkerDetailView(name: s.id) { Task { await reload() } }
                     } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(s.id).font(.headline)
@@ -42,7 +111,15 @@ struct WorkersView: View {
                     }
                 }
             }
-            .overlay { if scripts.isEmpty { EmptyHint(text: "没有 Worker") } }
+            .overlay {
+                if scripts.isEmpty {
+                    VStack(spacing: 12) {
+                        EmptyHint(text: "还没有 Worker")
+                        Button("Start with Hello World!") { creating = true }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
             .refreshable { await reload() }
             .sheet(isPresented: $creating) {
                 NavigationStack {
@@ -63,8 +140,11 @@ struct WorkersView: View {
     }
 }
 
+// MARK: - 编辑器
+
 struct WorkerEditorView: View {
     @EnvironmentObject var session: Session
+    @Environment(\.dismiss) private var dismiss
     @State var name: String
     let isNew: Bool
     let onSaved: () -> Void
@@ -72,15 +152,17 @@ struct WorkerEditorView: View {
     @State private var code = ""
     @State private var loaded = false
     @State private var saving = false
+    @State private var savedOK = false
     @State private var message: String?
     @State private var error: String?
 
     private var isModule: Bool { code.contains("export default") || code.contains("export {") }
+    private var cleanName: String { name.trimmingCharacters(in: .whitespaces).lowercased() }
 
     var body: some View {
         VStack(spacing: 0) {
             if isNew {
-                TextField("Worker 名称", text: $name)
+                TextField("Worker 名称（小写字母、数字、连字符）", text: $name)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                     .padding(10).background(Color(.secondarySystemBackground))
             }
@@ -100,19 +182,41 @@ struct WorkerEditorView: View {
             }
             .padding(8)
         }
-        .navigationTitle(isNew ? "新建 Worker" : name)
+        .navigationTitle(isNew ? "创建 Worker" : name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            if isNew {
+                ToolbarItemGroup(placement: .navigationBarLeading) {
+                    Button("取消") { dismiss() }
+                    Menu("模板") {
+                        ForEach(WorkerTemplate.allCases) { t in
+                            Button(t.title) { apply(t) }
+                        }
+                    }
+                }
+            }
             ToolbarItem(placement: .confirmationAction) {
-                Button(saving ? "上传中…" : "保存并部署") { Task { await save() } }
-                    .disabled(saving || name.isEmpty || code.isEmpty)
+                Button(saving ? "部署中…" : (isNew ? "部署" : "保存并部署")) { Task { await save() } }
+                    .disabled(saving || cleanName.isEmpty || code.isEmpty)
             }
         }
         .task { await load() }
-        .alert("提示", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
-            Button("好") { message = nil }
+        .onAppear {
+            if isNew && code.isEmpty { apply(.helloWorld) }
+        }
+        .alert("提示", isPresented: Binding(get: { message != nil }, set: { _ in })) {
+            Button("好") {
+                message = nil
+                if savedOK { savedOK = false; onSaved() }
+            }
         } message: { Text(message ?? "") }
         .errorAlert($error)
+    }
+
+    private func apply(_ t: WorkerTemplate) {
+        code = t.code
+        let known = WorkerTemplate.allCases.map(\.defaultName)
+        if name.isEmpty || known.contains(name) { name = t.defaultName }
     }
 
     private func load() async {
@@ -129,6 +233,7 @@ struct WorkerEditorView: View {
         saving = true
         defer { saving = false }
         let ctx = session.ctx
+        let scriptName = isNew ? cleanName : name
         let module = isModule
         let fileName = module ? "worker.js" : "script.js"
         let metadata: [String: String] = module ? ["main_module": fileName] : ["body_part": "script"]
@@ -141,12 +246,23 @@ struct WorkerEditorView: View {
         ]
         let (body, ct) = buildMultipart(parts)
         do {
-            // 新建用 scripts/{name}，已有脚本只更新代码用 /content，保留绑定与设置
-            let path = isNew ? "accounts/\(ctx.acc)/workers/scripts/\(name)"
-                             : "accounts/\(ctx.acc)/workers/scripts/\(name)/content"
+            // 新建：PUT scripts/{name}；已有脚本只更新代码（/content），保留绑定与设置
+            let path = isNew ? "accounts/\(ctx.acc)/workers/scripts/\(scriptName)"
+                             : "accounts/\(ctx.acc)/workers/scripts/\(scriptName)/content"
             let _: JSONValue = try await ctx.c.request("PUT", path, body: body, contentType: ct)
-            message = "已部署"
-            onSaved()
+
+            var text = "已部署"
+            if isNew {
+                // 尽力开启 workers.dev 访问并给出链接
+                _ = try? await ctx.c.send("POST", "accounts/\(ctx.acc)/workers/scripts/\(scriptName)/subdomain",
+                                          json: ["enabled": true])
+                if let sub: WorkerSubdomain = try? await ctx.c.get("accounts/\(ctx.acc)/workers/subdomain"),
+                   let s = sub.subdomain {
+                    text += "\nhttps://\(scriptName).\(s).workers.dev"
+                }
+            }
+            savedOK = true
+            message = text
         } catch { self.error = error.localizedDescription }
     }
 }
