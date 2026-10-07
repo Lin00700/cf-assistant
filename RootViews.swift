@@ -33,6 +33,9 @@ struct LoginView: View {
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                 }
+                Section(footer: Text("优选 IP 只在本机测速，不需要登录 Cloudflare。")) {
+                    NavigationLink { PreferredIPView() } label: { Label("不登录，直接使用优选 IP 工具", systemImage: "speedometer") }
+                }
                 Section {
                     Button {
                         Task { await doLogin() }
@@ -96,6 +99,7 @@ struct DeveloperView: View {
             NavigationLink { WorkersView() } label: { Label("Workers", systemImage: "bolt.fill") }
             NavigationLink { PagesView() } label: { Label("Pages", systemImage: "doc.richtext.fill") }
             NavigationLink { TunnelsView() } label: { Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted") }
+            NavigationLink { PreferredIPView() } label: { Label("优选 IP", systemImage: "speedometer") }
         }
         .navigationTitle("开发者")
     }

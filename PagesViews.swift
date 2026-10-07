@@ -1,13 +1,34 @@
 import SwiftUI
 
-struct PagesStage: Decodable { let name: String?; let status: String? }
+// MARK: - 模型
+
+struct PagesStage: Decodable {
+    let name: String?
+    let status: String?
+    let started_on: String?
+    let ended_on: String?
+}
+
+struct PagesTriggerMeta: Decodable {
+    let branch: String?
+    let commit_hash: String?
+    let commit_message: String?
+}
+
+struct PagesTrigger: Decodable {
+    let type: String?
+    let metadata: PagesTriggerMeta?
+}
 
 struct PagesDeployment: Decodable, Identifiable {
     let id: String
     let environment: String?
     let created_on: String?
     let url: String?
+    let aliases: [String]?
     let latest_stage: PagesStage?
+    let stages: [PagesStage]?
+    let deployment_trigger: PagesTrigger?
 }
 
 struct PagesProject: Decodable, Identifiable, Hashable {
@@ -19,6 +40,38 @@ struct PagesProject: Decodable, Identifiable, Hashable {
     static func == (l: PagesProject, r: PagesProject) -> Bool { l.name == r.name }
     func hash(into h: inout Hasher) { h.combine(name) }
 }
+
+func pagesDate(_ s: String?) -> Date? {
+    guard let s = s else { return nil }
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    if let d = f.date(from: s) { return d }
+    f.formatOptions = [.withInternetDateTime]
+    return f.date(from: s)
+}
+
+func pagesStatusText(_ s: String?) -> String {
+    switch s {
+    case "success": return "成功"
+    case "failure": return "失败"
+    case "active": return "进行中"
+    case "idle": return "等待中"
+    case "canceled": return "已取消"
+    case "skipped": return "已跳过"
+    default: return s ?? "-"
+    }
+}
+
+func pagesStatusColor(_ s: String?) -> Color {
+    switch s {
+    case "success": return .green
+    case "failure": return .red
+    case "active": return .blue
+    default: return .gray
+    }
+}
+
+// MARK: - 项目列表
 
 struct PagesView: View {
     @EnvironmentObject var session: Session
@@ -55,83 +108,65 @@ struct PagesView: View {
     }
 }
 
-struct PagesDeploymentsView: View {
+// MARK: - 项目页（仿控制台四个分页）
+
+enum PagesTab: String, CaseIterable, Identifiable {
+    case deployments = "部署"
+    case metrics = "指标"
+    case domains = "自定义域名"
+    case settings = "设置"
+    var id: String { rawValue }
+}
+
+struct PagesProjectView: View {
     @EnvironmentObject var session: Session
     let project: PagesProject
-    @State private var error: String?
+    @State private var tab: PagesTab = .deployments
     @State private var deploying = false
+    @State private var refresh = UUID()
 
     var body: some View {
-        let ctx = session.ctx
-        let pname = project.name
-        LoadView(load: { () async throws -> [PagesDeployment] in
-            try await ctx.c.get("accounts/\(ctx.acc)/pages/projects/\(pname)/deployments")
-        }) { deployments, reload in
-            List(deployments) { d in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(d.environment ?? "-").font(.caption.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background((d.environment == "production" ? Color.green : Color.gray).opacity(0.2))
-                            .cornerRadius(4)
-                        Text(d.latest_stage?.status ?? "").font(.caption).foregroundColor(.secondary)
-                        Spacer()
-                        if let c = d.created_on {
-                            Text(c.prefix(16).replacingOccurrences(of: "T", with: " "))
-                                .font(.caption2).foregroundColor(.secondary)
-                        }
-                    }
-                    if let u = d.url, let link = URL(string: u) {
-                        Link(u, destination: link).font(.caption).lineLimit(1)
-                    }
-                }
-                .swipeActions(edge: .trailing) {
-                    Button("删除", role: .destructive) {
-                        Task {
-                            do {
-                                try await ctx.c.delete(
-                                    "accounts/\(ctx.acc)/pages/projects/\(pname)/deployments/\(d.id)",
-                                    query: ["force": "true"])
-                                await reload()
-                            } catch { self.error = error.localizedDescription }
-                        }
-                    }
-                }
-                .swipeActions(edge: .leading) {
-                    Button("重试") {
-                        Task {
-                            do {
-                                let _: JSONValue = try await ctx.c.request(
-                                    "POST",
-                                    "accounts/\(ctx.acc)/pages/projects/\(pname)/deployments/\(d.id)/retry")
-                                await reload()
-                            } catch { self.error = error.localizedDescription }
-                        }
-                    }.tint(.blue)
-                    Button("回滚") {
-                        Task {
-                            do {
-                                let _: JSONValue = try await ctx.c.request(
-                                    "POST",
-                                    "accounts/\(ctx.acc)/pages/projects/\(pname)/deployments/\(d.id)/rollback")
-                                await reload()
-                            } catch { self.error = error.localizedDescription }
-                        }
-                    }.tint(.orange)
-                }
+        let acc = session.accountId
+        VStack(spacing: 0) {
+            Picker("", selection: $tab) {
+                ForEach(PagesTab.allCases) { Text($0.rawValue).tag($0) }
             }
-            .overlay { if deployments.isEmpty { EmptyHint(text: "没有部署记录") } }
-            .refreshable { await reload() }
-            .sheet(isPresented: $deploying) {
-                PagesDeployView(projectName: pname, fixedProject: true) { Task { await reload() } }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Group {
+                switch tab {
+                case .deployments:
+                    PagesDeploymentsContent(project: project.name).id(refresh)
+                case .metrics:
+                    PagesMetricsView(project: project.name)
+                case .domains:
+                    PagesDomainsContent(project: project.name)
+                case .settings:
+                    PagesSettingsContent(project: project)
+                }
             }
         }
         .navigationTitle(project.name)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button { deploying = true } label: { Label("新部署", systemImage: "arrow.up.circle") }
+                Menu {
+                    Button { deploying = true } label: { Label("新部署", systemImage: "arrow.up.circle") }
+                    if let sub = project.subdomain, let url = URL(string: "https://\(sub)") {
+                        Link(destination: url) { Label("在浏览器打开站点", systemImage: "safari") }
+                    }
+                    if let url = URL(string: "https://dash.cloudflare.com/\(acc)/pages/view/\(project.name)") {
+                        Link(destination: url) { Label("在 Cloudflare 控制台打开", systemImage: "arrow.up.right.square") }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
             }
         }
-        .errorAlert($error)
+        .sheet(isPresented: $deploying) {
+            PagesDeployView(projectName: project.name, fixedProject: true) { refresh = UUID() }
+        }
     }
 }
