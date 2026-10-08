@@ -22,6 +22,7 @@ struct PreferredIPView: View {
     @State private var showSources = false
     @State private var showLog = false
     @State private var showDNS = false
+    @State private var showVarPush = false
     @State private var shareItems: ShareItems?
     @State private var toast: String?
 
@@ -93,6 +94,10 @@ struct PreferredIPView: View {
                             Label("写入 Cloudflare DNS", systemImage: "icloud.and.arrow.up")
                         }
                         .disabled(engine.results.isEmpty)
+                        Button { showVarPush = true } label: {
+                            Label("写入 Worker / Pages 变量", systemImage: "key.icloud")
+                        }
+                        .disabled(engine.results.isEmpty)
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -103,6 +108,7 @@ struct PreferredIPView: View {
         .sheet(isPresented: $showSources) { BestCFSourcesView(engine: engine) }
         .sheet(isPresented: $showLog) { BestCFLogView(engine: engine) }
         .sheet(isPresented: $showDNS) { BestCFDNSPushView(results: engine.results) }
+        .sheet(isPresented: $showVarPush) { BestCFVarPushView(results: engine.results) }
         .sheet(item: $shareItems) { ShareSheet(items: $0.urls) }
         .overlay(alignment: .bottom) {
             if let t = toast {

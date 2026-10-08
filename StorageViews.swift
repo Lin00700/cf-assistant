@@ -41,13 +41,19 @@ struct KVKeysView: View {
     let ns: KVNamespace
     @State private var editing: KVEditTarget?
     @State private var error: String?
+    @State private var prefix = ""
+    @State private var appliedPrefix = ""
+    @State private var importing = false
+    @State private var toast: String?
 
     var body: some View {
         let ctx = session.ctx
         let nid = ns.id
+        let pfx = appliedPrefix
         LoadView(load: { () async throws -> [KVKey] in
-            try await ctx.c.get("accounts/\(ctx.acc)/storage/kv/namespaces/\(nid)/keys",
-                                query: ["limit": "1000"])
+            var q = ["limit": "1000"]
+            if !pfx.isEmpty { q["prefix"] = pfx }
+            return try await ctx.c.get("accounts/\(ctx.acc)/storage/kv/namespaces/\(nid)/keys", query: q)
         }) { keys, reload in
             List {
                 ForEach(keys) { k in
@@ -69,15 +75,32 @@ struct KVKeysView: View {
             .overlay { if keys.isEmpty { EmptyHint(text: "没有键") } }
             .refreshable { await reload() }
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    Menu {
+                        Button { importing = true } label: { Label("批量导入", systemImage: "square.and.arrow.down") }
+                        Button {
+                            UIPasteboard.general.string = keys.map { $0.name }.joined(separator: "\n")
+                            toast = "已复制 \(keys.count) 个键名"
+                        } label: { Label("复制当前键名", systemImage: "doc.on.doc") }
+                        .disabled(keys.isEmpty)
+                    } label: { Image(systemName: "ellipsis.circle") }
                     Button { editing = KVEditTarget(key: nil) } label: { Image(systemName: "plus") }
                 }
             }
             .sheet(item: $editing) { t in
                 KVEditView(nsId: nid, key: t.key) { Task { await reload() } }
             }
+            .sheet(isPresented: $importing) {
+                KVBulkImportSheet(nsId: nid) { Task { await reload() } }
+            }
         }
+        .id(appliedPrefix)
+        .searchable(text: $prefix, prompt: "按前缀搜索键")
+        .onSubmit(of: .search) { appliedPrefix = prefix.trimmingCharacters(in: .whitespaces) }
         .navigationTitle(ns.title)
+        .alert("提示", isPresented: Binding(get: { toast != nil }, set: { _ in })) {
+            Button("好") { toast = nil }
+        } message: { Text(toast ?? "") }
         .errorAlert($error)
     }
 

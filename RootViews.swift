@@ -110,6 +110,9 @@ struct MoreView: View {
 
     var body: some View {
         List {
+            Section("工具") {
+                NavigationLink { APITokensView() } label: { Label("API Token 管理", systemImage: "key.horizontal") }
+            }
             Section("账户") {
                 if session.accounts.count > 1 {
                     Picker("当前账户", selection: $session.accountId) {

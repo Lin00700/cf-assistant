@@ -292,7 +292,7 @@ struct OverviewView: View {
             }
             ForEach(m.zones.prefix(5)) { z in
                 NavigationLink {
-                    DNSRecordsView(zone: z)
+                    ZoneDetailView(zone: z)
                 } label: {
                     HStack(spacing: 12) {
                         Text(String(z.name.prefix(1)).uppercased())

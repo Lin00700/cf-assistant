@@ -44,7 +44,7 @@ struct ZonesView: View {
             }
             .overlay { if zones.isEmpty { EmptyHint(text: "没有域名") } }
             .refreshable { await reload() }
-            .navigationDestination(for: Zone.self) { DNSRecordsView(zone: $0) }
+            .navigationDestination(for: Zone.self) { ZoneDetailView(zone: $0) }
         }
         .navigationTitle("域名")
     }
@@ -94,6 +94,11 @@ struct DNSRecordsView: View {
             }
             .overlay { if records.isEmpty { EmptyHint(text: "没有 DNS 记录") } }
             .refreshable { await reload() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    DNSToolsMenu(zone: zone, records: records) { Task { await reload() } }
+                }
+            }
             .sheet(item: $editing) { r in
                 DNSEditView(zoneId: zid, record: r) { Task { await reload() } }
             }
