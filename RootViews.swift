@@ -85,6 +85,8 @@ struct RootView: View {
                 .tabItem { Label("开发者", systemImage: "chevron.left.forwardslash.chevron.right") }
             NavigationStack { StorageView() }
                 .tabItem { Label("存储", systemImage: "externaldrive.fill") }
+            NavigationStack { AIView() }
+                .tabItem { Label("AI", systemImage: "sparkles") }
             NavigationStack { MoreView() }
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
