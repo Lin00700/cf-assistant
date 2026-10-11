@@ -21,13 +21,13 @@ extension View {
         self
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(AIAITheme.card))
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(AITheme.card))
     }
 
     func aiField() -> some View {
         self
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AIAITheme.card))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(AITheme.card))
     }
 }
 
