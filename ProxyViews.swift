@@ -8,6 +8,71 @@ private struct ProxyNodeCategory: Identifiable {
     let nodes: [ProxyNode]
 }
 
+private struct ProxyNodeLatencyLabel: View {
+    let result: ProxyProbeResult?
+
+    private var color: Color {
+        guard let result else { return .secondary }
+        switch result {
+        case .latency(let milliseconds):
+            if milliseconds < 150 { return .green }
+            if milliseconds < 400 { return .orange }
+            return .red
+        case .unreachable:
+            return .red
+        }
+    }
+
+    var body: some View {
+        Text(result?.label ?? "未测")
+            .font(.caption.monospacedDigit())
+            .foregroundColor(color)
+    }
+}
+
+private struct ProxyNodeRow: View {
+    let node: ProxyNode
+    let subscriptionName: String?
+    let latencyResult: ProxyProbeResult?
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onEdit: () -> Void
+    let onCopy: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.name).foregroundColor(.primary)
+                    Text(node.detail).font(.caption).foregroundColor(.secondary)
+                    if let subscriptionName {
+                        Text("订阅：\(subscriptionName)").font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    ProxyNodeLatencyLabel(result: latencyResult)
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
+                    }
+                }
+            }
+        }
+        .contextMenu {
+            Button(action: onEdit) {
+                Label("编辑节点", systemImage: "pencil")
+            }
+            Button("复制分享链接", action: onCopy)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(action: onEdit) {
+                Label("编辑", systemImage: "pencil")
+            }
+            .tint(.blue)
+        }
+    }
+}
+
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -89,39 +154,15 @@ struct ProxyHomeView: View {
             ForEach(visibleProtocolGroups) { group in
                 Section {
                     ForEach(group.nodes) { n in
-                        Button { choose(n) } label: {
-                            let latencyResult: ProxyProbeResult? = latencyByNode[n.id]
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(n.name).foregroundColor(.primary)
-                                    Text(n.detail).font(.caption).foregroundColor(.secondary)
-                                    if let source = subscriptionName(for: n) {
-                                        Text("订阅：\(source)").font(.caption2).foregroundColor(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                VStack(alignment: .trailing, spacing: 4) {
-                                    latencyLabel(for: latencyResult)
-                                    if store.selectionMode == .manual && n.id == store.selected?.id {
-                                        Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
-                                    }
-                                }
-                            }
-                        }
-                        .contextMenu {
-                            Button { nodeBeingEdited = n } label: {
-                                Label("编辑节点", systemImage: "pencil")
-                            }
-                            Button("复制分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
-                        }
-                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button {
-                                nodeBeingEdited = n
-                            } label: {
-                                Label("编辑", systemImage: "pencil")
-                            }
-                            .tint(.blue)
-                        }
+                        ProxyNodeRow(
+                            node: n,
+                            subscriptionName: subscriptionName(for: n),
+                            latencyResult: latencyByNode[n.id],
+                            isSelected: store.selectionMode == .manual && n.id == store.selected?.id,
+                            onSelect: { choose(n) },
+                            onEdit: { nodeBeingEdited = n },
+                            onCopy: { UIPasteboard.general.string = LinkParser.shareLink(n) }
+                        )
                     }
                     .onDelete { offsets in
                         store.remove(ids: Set(offsets.map { group.nodes[$0].id }))
@@ -259,24 +300,6 @@ struct ProxyHomeView: View {
 
     private var reachableLatencyCount: Int {
         store.nodes.compactMap { latencyByNode[$0.id] }.filter { $0.isReachable }.count
-    }
-
-    private func latencyColor(for result: ProxyProbeResult?) -> Color {
-        guard let result else { return .secondary }
-        switch result {
-        case .latency(let milliseconds):
-            if milliseconds < 150 { return .green }
-            if milliseconds < 400 { return .orange }
-            return .red
-        case .unreachable:
-            return .red
-        }
-    }
-
-    private func latencyLabel(for result: ProxyProbeResult?) -> some View {
-        let text = result?.label ?? "未测"
-        let color = latencyColor(for: result)
-        return Text(text).font(.caption.monospacedDigit()).foregroundColor(color)
     }
 
     @MainActor
