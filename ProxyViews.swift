@@ -154,6 +154,85 @@ private struct ProxyNodeListSection: View {
     }
 }
 
+private struct ProxyNodeAddSection: View {
+    let subscriptionCount: Int
+
+    var body: some View {
+        Section("添加节点") {
+            NavigationLink { NodeDeployView() } label: {
+                Label("部署新节点到 Cloudflare", systemImage: "icloud.and.arrow.up")
+            }
+            NavigationLink { ImportNodesView() } label: {
+                Label("导入链接 / 订阅", systemImage: "square.and.arrow.down")
+            }
+            NavigationLink { ProxySubscriptionsView() } label: {
+                Label("管理订阅（\(subscriptionCount)）", systemImage: "list.bullet.rectangle")
+            }
+        }
+    }
+}
+
+private struct ProxyExternalClientSection: View {
+    let nodes: [ProxyNode]
+    let selectedID: UUID?
+    let selectedNode: ProxyNode?
+    let selectionMode: ProxySelectionMode
+    let bypassCN: Bool
+    let routingRules: [ProxyRoutingRule]
+    @Binding var exportMessage: String?
+    @Binding var exportURL: URL?
+    @Binding var error: String?
+    let onOpenShadowrocket: (ProxyNode) -> Void
+
+    var body: some View {
+        Section("外部客户端模式", footer: Text("Clash Meta / Mihomo 可导入支持的节点、自动/手动组和分流规则；不兼容的传输类型会跳过。Shadowrocket 可接收单节点链接。外部客户端的 VPN 连接由它自身管理。")) {
+            Button("生成并复制 Clash Meta / Mihomo 配置", action: exportConfiguration)
+            if let exportMessage {
+                Text(exportMessage).font(.caption).foregroundColor(.secondary)
+            }
+            if let exportURL {
+                ShareLink(item: exportURL) {
+                    Label("分享 / 导入 Clash 配置文件", systemImage: "square.and.arrow.up")
+                }
+            }
+            if let node = selectedNode, !LinkParser.shareLink(node).isEmpty {
+                Button("复制选中节点分享链接") {
+                    UIPasteboard.general.string = LinkParser.shareLink(node)
+                }
+                Button("用 Shadowrocket 打开选中节点") {
+                    onOpenShadowrocket(node)
+                }
+            }
+        }
+    }
+
+    private func exportConfiguration() {
+        let exportableCount = ClashConfig.exportableNodeCount(nodes: nodes)
+        let config = ClashConfig.build(
+            nodes: nodes,
+            selectedID: selectedID,
+            selectionMode: selectionMode,
+            bypassCN: bypassCN,
+            routingRules: routingRules
+        )
+        guard !config.isEmpty else {
+            exportMessage = "没有可导出的 Clash 节点"
+            return
+        }
+        UIPasteboard.general.string = config
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("cf-assistant-clash-meta.yaml")
+        do {
+            try Data(config.utf8).write(to: fileURL, options: .atomic)
+            exportURL = fileURL
+            let skippedCount = nodes.count - exportableCount
+            let skippedText = skippedCount > 0 ? "；另有 \(skippedCount) 个不兼容节点未导出" : ""
+            exportMessage = "已复制并生成配置文件（\(exportableCount) 个节点）\(skippedText)"
+        } catch {
+            self.error = "写入 Clash 配置失败：\(error.localizedDescription)"
+        }
+    }
+}
+
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -219,58 +298,21 @@ struct ProxyHomeView: View {
                 )
             }
 
-            Section("添加节点") {
-                NavigationLink { NodeDeployView() } label: {
-                    Label("部署新节点到 Cloudflare", systemImage: "icloud.and.arrow.up")
-                }
-                NavigationLink { ImportNodesView() } label: {
-                    Label("导入链接 / 订阅", systemImage: "square.and.arrow.down")
-                }
-                NavigationLink { ProxySubscriptionsView() } label: {
-                    Label("管理订阅（\(store.subscriptions.count)）", systemImage: "list.bullet.rectangle")
-                }
-            }
+            ProxyNodeAddSection(subscriptionCount: store.subscriptions.count)
 
             if !store.nodes.isEmpty {
-                Section("外部客户端模式", footer: Text("Clash Meta / Mihomo 可导入支持的节点、自动/手动组和分流规则；不兼容的传输类型会跳过。Shadowrocket 可接收单节点链接。外部客户端的 VPN 连接由它自身管理。")) {
-                    Button("生成并复制 Clash Meta / Mihomo 配置") {
-                        let exportableCount = ClashConfig.exportableNodeCount(nodes: store.nodes)
-                        let config = ClashConfig.build(
-                            nodes: store.nodes,
-                            selectedID: store.selectedID,
-                            selectionMode: store.selectionMode,
-                            bypassCN: store.bypassCN,
-                            routingRules: store.routingRules
-                        )
-                        guard !config.isEmpty else {
-                            clashExportMessage = "没有可导出的 Clash 节点"
-                            return
-                        }
-                        UIPasteboard.general.string = config
-                        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("cf-assistant-clash-meta.yaml")
-                        do {
-                            try Data(config.utf8).write(to: fileURL, options: .atomic)
-                            clashExportURL = fileURL
-                            let skippedCount = store.nodes.count - exportableCount
-                            let skippedText = skippedCount > 0 ? "；另有 \(skippedCount) 个不兼容节点未导出" : ""
-                            clashExportMessage = "已复制并生成配置文件（\(exportableCount) 个节点）\(skippedText)"
-                        } catch {
-                            self.error = "写入 Clash 配置失败：\(error.localizedDescription)"
-                        }
-                    }
-                    if let clashExportMessage {
-                        Text(clashExportMessage).font(.caption).foregroundColor(.secondary)
-                    }
-                    if let clashExportURL {
-                        ShareLink(item: clashExportURL) {
-                            Label("分享 / 导入 Clash 配置文件", systemImage: "square.and.arrow.up")
-                        }
-                    }
-                    if let n = store.selected, !LinkParser.shareLink(n).isEmpty {
-                        Button("复制选中节点分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
-                        Button("用 Shadowrocket 打开选中节点") { openShadowrocket(n) }
-                    }
-                }
+                ProxyExternalClientSection(
+                    nodes: store.nodes,
+                    selectedID: store.selectedID,
+                    selectedNode: store.selected,
+                    selectionMode: store.selectionMode,
+                    bypassCN: store.bypassCN,
+                    routingRules: store.routingRules,
+                    exportMessage: $clashExportMessage,
+                    exportURL: $clashExportURL,
+                    error: $error,
+                    onOpenShadowrocket: openShadowrocket
+                )
             }
         }
         .navigationTitle("VPN 与节点")
