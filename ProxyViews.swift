@@ -185,7 +185,7 @@ private struct ProxyExternalClientSection: View {
     let onOpenShadowrocket: (ProxyNode) -> Void
 
     var body: some View {
-        Section("外部客户端模式", footer: Text("Clash Meta / Mihomo 可导入支持的节点、自动/手动组和分流规则；不兼容的传输类型会跳过。Shadowrocket 可接收单节点链接。外部客户端的 VPN 连接由它自身管理。")) {
+        Section {
             Button("生成并复制 Clash Meta / Mihomo 配置", action: exportConfiguration)
             if let exportMessage {
                 Text(exportMessage).font(.caption).foregroundColor(.secondary)
@@ -203,6 +203,10 @@ private struct ProxyExternalClientSection: View {
                     onOpenShadowrocket(node)
                 }
             }
+        } header: {
+            Text("外部客户端模式")
+        } footer: {
+            Text("Clash Meta / Mihomo 可导入支持的节点、自动/手动组和分流规则；不兼容的传输类型会跳过。Shadowrocket 可接收单节点链接。外部客户端的 VPN 连接由它自身管理。")
         }
     }
 
