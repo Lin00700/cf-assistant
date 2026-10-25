@@ -90,6 +90,7 @@ struct ProxyHomeView: View {
                 Section {
                     ForEach(group.nodes) { n in
                         Button { choose(n) } label: {
+                            let latencyResult: ProxyProbeResult? = latencyByNode[n.id]
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(n.name).foregroundColor(.primary)
@@ -100,9 +101,9 @@ struct ProxyHomeView: View {
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 4) {
-                                    Text(latencyByNode[n.id]?.label ?? "未测")
+                                    Text(latencyResult?.label ?? "未测")
                                         .font(.caption.monospacedDigit())
-                                        .foregroundColor(latencyColor(for: latencyByNode[n.id]))
+                                        .foregroundColor(latencyColor(for: latencyResult))
                                     if store.selectionMode == .manual && n.id == store.selected?.id {
                                         Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
                                     }

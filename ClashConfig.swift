@@ -192,9 +192,9 @@ enum ClashConfig {
         node.p("allowInsecure") == "1" || node.p("insecure") == "1"
     }
 
-    private static func appendIfPresent(_ key: String, _ value: String?, to lines: inout [String]) {
+    private static func appendIfPresent(_ key: String, _ value: String?, indent: Int = 4, to lines: inout [String]) {
         guard let value, !value.isEmpty else { return }
-        append(key, value, to: &lines)
+        append(key, value, indent: indent, to: &lines)
     }
 
     private static func appendSkipCertVerify(_ node: ProxyNode, to lines: inout [String]) {
