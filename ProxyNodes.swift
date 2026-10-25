@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - 节点模型
 
-struct ProxyNode: Codable, Identifiable, Hashable {
+struct ProxyNode: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var proto: String            // vless / vmess / trojan / ss / hysteria2

@@ -6,6 +6,8 @@ struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
     @State private var error: String?
+    @State private var latencyByNode: [UUID: ProxyProbeResult] = [:]
+    @State private var isRefreshingLatency = false
 
     var body: some View {
         List {
@@ -24,7 +26,7 @@ struct ProxyHomeView: View {
                 Toggle("大陆常见域名直连", isOn: $store.bypassCN)
             }
 
-            Section("节点") {
+            Section {
                 if store.nodes.isEmpty {
                     EmptyHint(text: "还没有节点，下面可以部署或导入")
                 }
@@ -36,8 +38,13 @@ struct ProxyHomeView: View {
                                 Text(n.detail).font(.caption).foregroundColor(.secondary)
                             }
                             Spacer()
-                            if n.id == store.selected?.id {
-                                Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(latencyByNode[n.id]?.label ?? "未测")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundColor(latencyColor(for: latencyByNode[n.id]))
+                                if n.id == store.selected?.id {
+                                    Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
+                                }
                             }
                         }
                     }
@@ -46,6 +53,29 @@ struct ProxyHomeView: View {
                     }
                 }
                 .onDelete { store.remove(at: $0) }
+            } header: {
+                HStack {
+                    Text("节点")
+                    Spacer()
+                    if testedLatencyCount > 0 {
+                        Text("连通 \(reachableLatencyCount)/\(testedLatencyCount)")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                    Button {
+                        Task { await refreshLatency() }
+                    } label: {
+                        if isRefreshingLatency {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("刷新延迟", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    .disabled(isRefreshingLatency || store.nodes.isEmpty || vpn.isActive)
+                }
+            } footer: {
+                Text("请先断开 VPN 再刷新，避免测速流量回到当前代理。延迟为 TCP 端口建连时间，只表示地址可达，不代表代理吞吐；Hysteria2 使用 UDP，不参与此项测速。")
             }
 
             Section("添加节点") {
@@ -79,6 +109,57 @@ struct ProxyHomeView: View {
                 await vpn.set(on: true, node: n, bypassCN: store.bypassCN)
             }
         }
+    }
+
+    private var testedLatencyCount: Int {
+        store.nodes.compactMap { latencyByNode[$0.id] }.filter { $0.countsAsTested }.count
+    }
+
+    private var reachableLatencyCount: Int {
+        store.nodes.compactMap { latencyByNode[$0.id] }.filter { $0.isReachable }.count
+    }
+
+    private func latencyColor(for result: ProxyProbeResult?) -> Color {
+        guard let result else { return .secondary }
+        switch result {
+        case .latency(let milliseconds):
+            if milliseconds < 150 { return .green }
+            if milliseconds < 400 { return .orange }
+            return .red
+        case .unreachable:
+            return .red
+        case .unsupported:
+            return .secondary
+        }
+    }
+
+    @MainActor
+    private func refreshLatency() async {
+        guard !isRefreshingLatency, !store.nodes.isEmpty else { return }
+        isRefreshingLatency = true
+        latencyByNode = [:]
+        defer { isRefreshingLatency = false }
+
+        let nodes = store.nodes
+        let results = await withTaskGroup(of: (UUID, ProxyProbeResult).self) { group in
+            var nextIndex = 0
+            var collected: [UUID: ProxyProbeResult] = [:]
+            for _ in 0..<min(8, nodes.count) {
+                let node = nodes[nextIndex]
+                nextIndex += 1
+                group.addTask { (node.id, await ProxyLatencyProbe.measure(node)) }
+            }
+            while let (id, result) = await group.next() {
+                collected[id] = result
+                if nextIndex < nodes.count {
+                    let node = nodes[nextIndex]
+                    nextIndex += 1
+                    group.addTask { (node.id, await ProxyLatencyProbe.measure(node)) }
+                }
+            }
+            return collected
+        }
+        latencyByNode = results
     }
 
     private func openShadowrocket(_ n: ProxyNode) {
