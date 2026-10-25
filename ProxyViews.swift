@@ -107,6 +107,53 @@ private struct ProxyNodeCategorySection: View {
     }
 }
 
+private struct ProxyNodeListSection: View {
+    let nodes: [ProxyNode]
+    let categoryNames: [String]
+    @Binding var protocolFilter: String
+    let testedLatencyCount: Int
+    let reachableLatencyCount: Int
+    let isRefreshingLatency: Bool
+    let onRefresh: () -> Void
+
+    var body: some View {
+        Section {
+            if nodes.isEmpty {
+                EmptyHint(text: "还没有节点，下面可以部署或导入")
+            }
+            if !nodes.isEmpty {
+                Picker("节点分类", selection: $protocolFilter) {
+                    Text("全部").tag("全部")
+                    ForEach(categoryNames, id: \.self) { category in
+                        Text(category).tag(category)
+                    }
+                }
+            }
+        } header: {
+            HStack {
+                Text("节点")
+                Spacer()
+                if testedLatencyCount > 0 {
+                    Text("连通 \(reachableLatencyCount)/\(testedLatencyCount)")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                Button(action: onRefresh) {
+                    if isRefreshingLatency {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("刷新延迟", systemImage: "arrow.clockwise")
+                    }
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+                .disabled(isRefreshingLatency || nodes.isEmpty)
+            }
+        } footer: {
+            Text("左滑节点可编辑地址、端口等设置。开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
+        }
+    }
+}
+
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -148,42 +195,15 @@ struct ProxyHomeView: View {
                 Toggle("大陆常见域名直连", isOn: $store.bypassCN)
             }
 
-            Section {
-                if store.nodes.isEmpty {
-                    EmptyHint(text: "还没有节点，下面可以部署或导入")
-                }
-                if !store.nodes.isEmpty {
-                    Picker("节点分类", selection: $protocolFilter) {
-                        Text("全部").tag("全部")
-                        ForEach(categoryNames, id: \.self) { category in
-                            Text(category).tag(category)
-                        }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("节点")
-                    Spacer()
-                    if testedLatencyCount > 0 {
-                        Text("连通 \(reachableLatencyCount)/\(testedLatencyCount)")
-                            .font(.caption).foregroundColor(.secondary)
-                    }
-                    Button {
-                        Task { await refreshLatency() }
-                    } label: {
-                        if isRefreshingLatency {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label("刷新延迟", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .font(.caption)
-                    .buttonStyle(.borderless)
-                    .disabled(isRefreshingLatency || store.nodes.isEmpty)
-                }
-            } footer: {
-                Text("左滑节点可编辑地址、端口等设置。开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
-            }
+            ProxyNodeListSection(
+                nodes: store.nodes,
+                categoryNames: categoryNames,
+                protocolFilter: $protocolFilter,
+                testedLatencyCount: testedLatencyCount,
+                reachableLatencyCount: reachableLatencyCount,
+                isRefreshingLatency: isRefreshingLatency,
+                onRefresh: { Task { await refreshLatency() } }
+            )
 
             ForEach(visibleProtocolGroups) { group in
                 ProxyNodeCategorySection(
