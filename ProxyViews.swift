@@ -17,6 +17,7 @@ struct ProxyHomeView: View {
     @State private var protocolFilter = "全部"
     @State private var clashExportMessage: String?
     @State private var clashExportURL: URL?
+    @State private var nodeBeingEdited: ProxyNode?
 
     var body: some View {
         List {
@@ -82,7 +83,7 @@ struct ProxyHomeView: View {
                     .disabled(isRefreshingLatency || store.nodes.isEmpty)
                 }
             } footer: {
-                Text("开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
+                Text("左滑节点可编辑地址、端口等设置。开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
             }
 
             ForEach(visibleProtocolGroups) { group in
@@ -109,7 +110,18 @@ struct ProxyHomeView: View {
                             }
                         }
                         .contextMenu {
+                            Button { nodeBeingEdited = n } label: {
+                                Label("编辑节点", systemImage: "pencil")
+                            }
                             Button("复制分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button {
+                                nodeBeingEdited = n
+                            } label: {
+                                Label("编辑", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
                     }
                     .onDelete { offsets in
@@ -176,6 +188,13 @@ struct ProxyHomeView: View {
         }
         .navigationTitle("VPN 与节点")
         .task { await vpn.load() }
+        .sheet(item: $nodeBeingEdited) { node in
+            NavigationStack {
+                ProxyNodeEditorView(node: node) { updated in
+                    store.update(updated)
+                }
+            }
+        }
         .onChange(of: store.nodes) { _ in restartTunnelForConfigurationChange() }
         .onChange(of: store.bypassCN) { _ in restartTunnelForConfigurationChange() }
         .onChange(of: store.routingRules) { _ in restartTunnelForConfigurationChange() }
@@ -272,6 +291,165 @@ struct ProxyHomeView: View {
            let url = URL(string: "shadowrocket://add/" + enc) {
             UIApplication.shared.open(url)
         }
+    }
+}
+
+struct ProxyNodeEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    private let originalNode: ProxyNode
+    @State private var draft: ProxyNode
+    @State private var portText: String
+    @State private var showSecret = false
+    @State private var error: String?
+    let onSave: (ProxyNode) -> Void
+
+    init(node: ProxyNode, onSave: @escaping (ProxyNode) -> Void) {
+        originalNode = node
+        _draft = State(initialValue: node)
+        _portText = State(initialValue: String(node.port))
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        Form {
+            Section("基本信息") {
+                TextField("节点名称", text: $draft.name)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("地址 / IP", text: $draft.server)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .keyboardType(.URL)
+                TextField("端口", text: $portText)
+                    .keyboardType(.numberPad)
+                LabeledContent("协议", value: draft.proto.uppercased())
+                HStack {
+                    Group {
+                        if showSecret {
+                            TextField("UUID / 密码", text: $draft.secret)
+                        } else {
+                            SecureField("UUID / 密码", text: $draft.secret)
+                        }
+                    }
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button {
+                        showSecret.toggle()
+                    } label: {
+                        Image(systemName: showSecret ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(showSecret ? "隐藏认证信息" : "显示认证信息")
+                }
+            }
+
+            if draft.proto == "ss" || draft.proto == "shadowsocks" {
+                Section("Shadowsocks") {
+                    parameterField("加密方式", key: "method", placeholder: "aes-128-gcm")
+                }
+            }
+            if draft.proto == "vmess" {
+                Section("VMess") {
+                    parameterField("加密方式", key: "scy", placeholder: "auto")
+                    parameterField("Alter ID", key: "aid", placeholder: "0")
+                }
+            }
+            if draft.proto == "vless" {
+                Section("VLESS") {
+                    parameterField("Flow", key: "flow")
+                    parameterField("Reality 公钥", key: "pbk")
+                    parameterField("Reality Short ID", key: "sid")
+                }
+            }
+            if draft.proto == "hysteria2" || draft.proto == "hy2" {
+                Section("Hysteria2") {
+                    parameterField("混淆类型", key: "obfs")
+                    parameterField("混淆密码", key: "obfs-password")
+                }
+            }
+
+            Section("TLS 与传输") {
+                parameterField("安全方式 (none / tls / reality)", key: "security")
+                parameterField("SNI / TLS 域名", key: "sni")
+                parameterField("TLS Peer", key: "peer")
+                parameterField("ALPN（逗号分隔）", key: "alpn")
+                parameterField("客户端指纹", key: "fp")
+                parameterField("传输类型 (tcp / ws / grpc)", key: "type")
+                parameterField("Host", key: "host")
+                parameterField("路径", key: "path")
+                parameterField("gRPC 服务名", key: "serviceName")
+                Toggle("跳过 TLS 证书验证", isOn: insecureBinding)
+            }
+
+            if draft.subscriptionID != nil {
+                Section("订阅节点") {
+                    Text("本地修改会在下次刷新该订阅时被覆盖。")
+                        .font(.footnote).foregroundColor(.secondary)
+                }
+            }
+        }
+        .navigationTitle("编辑节点")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("取消") { dismiss() }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("保存") { save() }
+            }
+        }
+        .errorAlert($error)
+    }
+
+    private func parameterField(_ title: String, key: String, placeholder: String? = nil) -> some View {
+        TextField(title, text: parameterBinding(key), prompt: placeholder.map { Text($0) })
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+    }
+
+    private func parameterBinding(_ key: String) -> Binding<String> {
+        Binding(
+            get: { draft.params[key] ?? "" },
+            set: { value in
+                var updated = draft
+                if value.isEmpty {
+                    updated.params.removeValue(forKey: key)
+                } else {
+                    updated.params[key] = value
+                }
+                draft = updated
+            }
+        )
+    }
+
+    private var insecureBinding: Binding<Bool> {
+        Binding(
+            get: { draft.p("allowInsecure") == "1" || draft.p("insecure") == "1" },
+            set: { enabled in
+                var updated = draft
+                updated.params.removeValue(forKey: "insecure")
+                if enabled {
+                    updated.params["allowInsecure"] = "1"
+                } else {
+                    updated.params.removeValue(forKey: "allowInsecure")
+                }
+                draft = updated
+            }
+        )
+    }
+
+    private func save() {
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let server = draft.server.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { error = "请填写节点名称"; return }
+        guard !server.isEmpty else { error = "请填写服务器地址或 IP"; return }
+        guard let port = Int(portText), (1...65535).contains(port) else {
+            error = "端口必须是 1 到 65535 之间的整数"
+            return
+        }
+        var updated = draft
+        updated.name = name
+        updated.server = server
+        updated.port = port
+        if updated != originalNode { updated.raw = "" }
+        onSave(updated)
+        dismiss()
     }
 }
 

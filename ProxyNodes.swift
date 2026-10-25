@@ -172,20 +172,51 @@ enum LinkParser {
                          secret: pass, params: ["method": method], raw: s)
     }
 
-    /// 导出分享链接（导入的节点用原链接；Worker 生成的 VLESS 节点现场拼）
+    /// 导入节点保留原始链接；编辑过的节点由当前配置重新生成分享链接。
     static func shareLink(_ n: ProxyNode) -> String {
         if !n.raw.isEmpty { return n.raw }
-        guard n.proto == "vless" else { return "" }
-        var items = [URLQueryItem(name: "encryption", value: "none")]
-        for k in n.params.keys.sorted() { if let v = n.p(k) { items.append(URLQueryItem(name: k, value: v)) } }
-        var c = URLComponents()
-        c.scheme = "vless"
-        c.user = n.secret
-        c.host = n.server
-        c.port = n.port
-        c.queryItems = items
-        c.fragment = n.name
-        return c.string ?? ""
+        switch n.proto.lowercased() {
+        case "vless", "trojan", "hysteria2", "hy2":
+            var items = n.params.keys.sorted().compactMap { key -> URLQueryItem? in
+                guard let value = n.p(key) else { return nil }
+                return URLQueryItem(name: key, value: value)
+            }
+            if n.proto.lowercased() == "vless", !items.contains(where: { $0.name == "encryption" }) {
+                items.append(URLQueryItem(name: "encryption", value: "none"))
+            }
+            var c = URLComponents()
+            c.scheme = n.proto.lowercased() == "hy2" ? "hysteria2" : n.proto.lowercased()
+            c.user = n.secret
+            c.host = n.server
+            c.port = n.port
+            c.queryItems = items.isEmpty ? nil : items
+            c.fragment = n.name
+            return c.string ?? ""
+        case "vmess":
+            var object: [String: String] = [
+                "v": "2", "ps": n.name, "add": n.server, "port": String(n.port),
+                "id": n.secret, "aid": n.p("aid") ?? "0",
+                "net": n.p("type") ?? n.p("net") ?? "tcp",
+                "host": n.p("host") ?? "", "path": n.p("path") ?? "",
+                "tls": n.p("security") == "tls" ? "tls" : "",
+                "sni": n.p("sni") ?? "", "alpn": n.p("alpn") ?? "",
+                "fp": n.p("fp") ?? "", "scy": n.p("scy") ?? "auto"
+            ]
+            if let type = n.p("type") { object["type"] = type }
+            guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { return "" }
+            return "vmess://" + data.base64EncodedString()
+        case "ss", "shadowsocks":
+            var c = URLComponents()
+            c.scheme = "ss"
+            c.user = n.p("method") ?? "aes-128-gcm"
+            c.password = n.secret
+            c.host = n.server
+            c.port = n.port
+            c.fragment = n.name
+            return c.string ?? ""
+        default:
+            return ""
+        }
     }
 }
 
@@ -392,6 +423,11 @@ final class ProxyStore: ObservableObject {
 
     func add(_ list: [ProxyNode]) {
         for n in list { add(n) }
+    }
+
+    func update(_ node: ProxyNode) {
+        guard let index = nodes.firstIndex(where: { $0.id == node.id }) else { return }
+        nodes[index] = node
     }
 
     @discardableResult
