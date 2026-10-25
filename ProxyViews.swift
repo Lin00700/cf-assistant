@@ -101,9 +101,7 @@ struct ProxyHomeView: View {
                                 }
                                 Spacer()
                                 VStack(alignment: .trailing, spacing: 4) {
-                                    Text(latencyResult?.label ?? "未测")
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundColor(latencyColor(for: latencyResult))
+                                    latencyLabel(for: latencyResult)
                                     if store.selectionMode == .manual && n.id == store.selected?.id {
                                         Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
                                     }
@@ -273,6 +271,12 @@ struct ProxyHomeView: View {
         case .unreachable:
             return .red
         }
+    }
+
+    private func latencyLabel(for result: ProxyProbeResult?) -> some View {
+        let text = result?.label ?? "未测"
+        let color = latencyColor(for: result)
+        return Text(text).font(.caption.monospacedDigit()).foregroundColor(color)
     }
 
     @MainActor
