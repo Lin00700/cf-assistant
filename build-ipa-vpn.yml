@@ -1,0 +1,53 @@
+name: Build IPA with VPN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build Libbox (sing-box 1.11 series)
+        run: |
+          TAG=$(git ls-remote --tags --refs https://github.com/SagerNet/sing-box.git 'refs/tags/v1.11.*' | awk -F/ '{print $3}' | grep -E '^v1\.11\.[0-9]+$' | sort -V | tail -1)
+          echo "sing-box tag: $TAG"
+          git clone --depth 1 --branch "$TAG" https://github.com/SagerNet/sing-box.git "$RUNNER_TEMP/sing-box"
+          cd "$RUNNER_TEMP/sing-box"
+          (go run ./cmd/internal/build_libbox -target apple -platform ios || go run ./cmd/internal/build_libbox -target apple)
+          ls -d Libbox.xcframework
+          mv Libbox.xcframework "$GITHUB_WORKSPACE/"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project-vpn.yml
+
+      - name: Build and Archive
+        run: |
+          xcodebuild archive -project CFAssistant.xcodeproj -scheme CFAssistant -sdk iphoneos \
+            -archivePath build/App.xcarchive \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+
+      - name: Embed entitlements (ad-hoc, re-signer keeps them)
+        run: |
+          APP=$(ls -d build/App.xcarchive/Products/Applications/*.app)
+          codesign -f -s - --entitlements CFTunnel.entitlements "$APP/PlugIns/CFTunnel.appex"
+          codesign -f -s - --entitlements CFAssistant.entitlements "$APP"
+
+      - name: Package into IPA
+        run: |
+          mkdir Payload
+          cp -r build/App.xcarchive/Products/Applications/*.app Payload/
+          zip -qry CFAssistant-VPN.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CFAssistant-VPN-IPA
+          path: CFAssistant-VPN.ipa

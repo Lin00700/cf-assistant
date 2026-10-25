@@ -10,6 +10,7 @@ targets:
     sources:
       - path: .
         includes: ["*.swift"]
+        excludes: ["PacketTunnelProvider.swift"]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios

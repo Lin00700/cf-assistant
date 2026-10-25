@@ -98,6 +98,7 @@ struct RootView: View {
 struct DeveloperView: View {
     var body: some View {
         List {
+            NavigationLink { ProxyHomeView() } label: { Label("VPN 与代理节点", systemImage: "lock.shield.fill") }
             NavigationLink { WorkersView() } label: { Label("Workers", systemImage: "bolt.fill") }
             NavigationLink { PagesView() } label: { Label("Pages", systemImage: "doc.richtext.fill") }
             NavigationLink { TunnelsView() } label: { Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted") }
