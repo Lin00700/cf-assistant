@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import NetworkExtension
+import UserNotifications
 import Libbox
 
 // VPN 扩展：用 sing-box 的 Libbox 在 NEPacketTunnelProvider 里跑全局代理。
@@ -23,7 +24,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try? fm.createDirectory(at: work, withIntermediateDirectories: true)
         try? fm.createDirectory(at: temp, withIntermediateDirectories: true)
 
-        LibboxSetup(base.path, work.path, temp.path, false)
+        let setupOptions = LibboxSetupOptions()
+        setupOptions.basePath = base.path
+        setupOptions.workingPath = work.path
+        setupOptions.tempPath = temp.path
+        var setupError: NSError?
+        LibboxSetup(setupOptions, &setupError)
+        if let setupError { throw setupError }
 
         let platform = TunnelPlatform(self)
         self.platform = platform
@@ -161,4 +168,37 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     func includeAllNetworks() -> Bool { false }
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
+
+    func send(_ notification: LibboxNotification?) throws {
+        guard let notification else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = notification.title
+        content.subtitle = notification.subtitle
+        content.body = notification.body
+        if !notification.openURL.isEmpty {
+            content.userInfo["OPEN_URL"] = notification.openURL
+            content.categoryIdentifier = "OPEN_URL"
+        }
+        content.interruptionLevel = .active
+
+        let request = UNNotificationRequest(
+            identifier: notification.identifier,
+            content: content,
+            trigger: nil
+        )
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert]) { granted, error in
+            if let error {
+                NSLog("sing-box notification permission failed: %@", error.localizedDescription)
+                return
+            }
+            guard granted else { return }
+            center.add(request) { addError in
+                if let addError {
+                    NSLog("sing-box notification failed: %@", addError.localizedDescription)
+                }
+            }
+        }
+    }
 }
