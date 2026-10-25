@@ -18,6 +18,10 @@ targets:
     dependencies:
       - target: CFTunnel
         embed: true
+    info:
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios

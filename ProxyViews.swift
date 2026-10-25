@@ -2,18 +2,27 @@ import SwiftUI
 
 // MARK: - VPN 主页
 
+private struct ProxyNodeCategory: Identifiable {
+    var id: String { title }
+    let title: String
+    let nodes: [ProxyNode]
+}
+
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
     @State private var error: String?
     @State private var latencyByNode: [UUID: ProxyProbeResult] = [:]
     @State private var isRefreshingLatency = false
+    @State private var protocolFilter = "全部"
+    @State private var clashExportMessage: String?
+    @State private var clashExportURL: URL?
 
     var body: some View {
         List {
             Section(footer: Text(vpn.extensionBundleID == nil
                                  ? "当前安装包不含 VPN 扩展：节点管理可用，开关需要「VPN 版」IPA。"
-                                 : "使用选中的节点建立全局 VPN。")) {
+                                 : "内置 VPN 使用选中的节点。也可把节点交给 Shadowrocket 等外部客户端，但连接和分流需在外部客户端内操作。")) {
                 Toggle(isOn: Binding(
                     get: { vpn.isActive },
                     set: { on in Task { await vpn.set(on: on, node: store.selected, bypassCN: store.bypassCN) } }
@@ -23,6 +32,19 @@ struct ProxyHomeView: View {
                         Text(vpn.statusText).font(.caption).foregroundColor(.secondary)
                     }
                 }
+                Picker("节点选择", selection: Binding(
+                    get: { store.selectionMode },
+                    set: { setSelectionMode($0) }
+                )) {
+                    ForEach(ProxySelectionMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                NavigationLink {
+                    ProxyRoutingRulesView()
+                } label: {
+                    Label("自定义分流规则（\(store.routingRules.count)）", systemImage: "arrow.triangle.branch")
+                }
                 Toggle("大陆常见域名直连", isOn: $store.bypassCN)
             }
 
@@ -30,29 +52,14 @@ struct ProxyHomeView: View {
                 if store.nodes.isEmpty {
                     EmptyHint(text: "还没有节点，下面可以部署或导入")
                 }
-                ForEach(store.nodes) { n in
-                    Button { choose(n) } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(n.name).foregroundColor(.primary)
-                                Text(n.detail).font(.caption).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text(latencyByNode[n.id]?.label ?? "未测")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundColor(latencyColor(for: latencyByNode[n.id]))
-                                if n.id == store.selected?.id {
-                                    Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
-                                }
-                            }
+                if !store.nodes.isEmpty {
+                    Picker("节点分类", selection: $protocolFilter) {
+                        Text("全部").tag("全部")
+                        ForEach(categoryNames, id: \.self) { category in
+                            Text(category).tag(category)
                         }
                     }
-                    .contextMenu {
-                        Button("复制分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
-                    }
                 }
-                .onDelete { store.remove(at: $0) }
             } header: {
                 HStack {
                     Text("节点")
@@ -72,10 +79,45 @@ struct ProxyHomeView: View {
                     }
                     .font(.caption)
                     .buttonStyle(.borderless)
-                    .disabled(isRefreshingLatency || store.nodes.isEmpty || vpn.isActive)
+                    .disabled(isRefreshingLatency || store.nodes.isEmpty)
                 }
             } footer: {
-                Text("请先断开 VPN 再刷新，避免测速流量回到当前代理。延迟为 TCP 端口建连时间，只表示地址可达，不代表代理吞吐；Hysteria2 使用 UDP，不参与此项测速。")
+                Text("开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
+            }
+
+            ForEach(visibleProtocolGroups) { group in
+                Section {
+                    ForEach(group.nodes) { n in
+                        Button { choose(n) } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(n.name).foregroundColor(.primary)
+                                    Text(n.detail).font(.caption).foregroundColor(.secondary)
+                                    if let source = subscriptionName(for: n) {
+                                        Text("订阅：\(source)").font(.caption2).foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text(latencyByNode[n.id]?.label ?? "未测")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundColor(latencyColor(for: latencyByNode[n.id]))
+                                    if store.selectionMode == .manual && n.id == store.selected?.id {
+                                        Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
+                                    }
+                                }
+                            }
+                        }
+                        .contextMenu {
+                            Button("复制分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
+                        }
+                    }
+                    .onDelete { offsets in
+                        store.remove(ids: Set(offsets.map { group.nodes[$0].id }))
+                    }
+                } header: {
+                    Text("\(group.title)（\(group.nodes.count)）")
+                }
             }
 
             Section("添加节点") {
@@ -85,30 +127,112 @@ struct ProxyHomeView: View {
                 NavigationLink { ImportNodesView() } label: {
                     Label("导入链接 / 订阅", systemImage: "square.and.arrow.down")
                 }
+                NavigationLink { ProxySubscriptionsView() } label: {
+                    Label("管理订阅（\(store.subscriptions.count)）", systemImage: "list.bullet.rectangle")
+                }
             }
 
-            if let n = store.selected, !LinkParser.shareLink(n).isEmpty {
-                Section("用其他客户端打开选中节点") {
-                    Button("复制分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
-                    Button("用 Shadowrocket 打开") { openShadowrocket(n) }
+            if !store.nodes.isEmpty {
+                Section("外部客户端模式", footer: Text("Clash Meta / Mihomo 可导入支持的节点、自动/手动组和分流规则；不兼容的传输类型会跳过。Shadowrocket 可接收单节点链接。外部客户端的 VPN 连接由它自身管理。")) {
+                    Button("生成并复制 Clash Meta / Mihomo 配置") {
+                        let exportableCount = ClashConfig.exportableNodeCount(nodes: store.nodes)
+                        let config = ClashConfig.build(
+                            nodes: store.nodes,
+                            selectedID: store.selectedID,
+                            selectionMode: store.selectionMode,
+                            bypassCN: store.bypassCN,
+                            routingRules: store.routingRules
+                        )
+                        guard !config.isEmpty else {
+                            clashExportMessage = "没有可导出的 Clash 节点"
+                            return
+                        }
+                        UIPasteboard.general.string = config
+                        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent("cf-assistant-clash-meta.yaml")
+                        do {
+                            try Data(config.utf8).write(to: fileURL, options: .atomic)
+                            clashExportURL = fileURL
+                            let skippedCount = store.nodes.count - exportableCount
+                            let skippedText = skippedCount > 0 ? "；另有 \(skippedCount) 个不兼容节点未导出" : ""
+                            clashExportMessage = "已复制并生成配置文件（\(exportableCount) 个节点）\(skippedText)"
+                        } catch {
+                            self.error = "写入 Clash 配置失败：\(error.localizedDescription)"
+                        }
+                    }
+                    if let clashExportMessage {
+                        Text(clashExportMessage).font(.caption).foregroundColor(.secondary)
+                    }
+                    if let clashExportURL {
+                        ShareLink(item: clashExportURL) {
+                            Label("分享 / 导入 Clash 配置文件", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                    if let n = store.selected, !LinkParser.shareLink(n).isEmpty {
+                        Button("复制选中节点分享链接") { UIPasteboard.general.string = LinkParser.shareLink(n) }
+                        Button("用 Shadowrocket 打开选中节点") { openShadowrocket(n) }
+                    }
                 }
             }
         }
         .navigationTitle("VPN 与节点")
         .task { await vpn.load() }
+        .onChange(of: store.nodes) { _ in restartTunnelForConfigurationChange() }
+        .onChange(of: store.bypassCN) { _ in restartTunnelForConfigurationChange() }
+        .onChange(of: store.routingRules) { _ in restartTunnelForConfigurationChange() }
         .onChange(of: vpn.error) { e in if let e { error = e } }
+        .toolbar { EditButton() }
         .errorAlert($error)
     }
 
     private func choose(_ n: ProxyNode) {
         store.selectedID = n.id
-        if vpn.isActive {
-            Task {
-                await vpn.set(on: false, node: nil, bypassCN: store.bypassCN)
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                await vpn.set(on: true, node: n, bypassCN: store.bypassCN)
-            }
+        store.selectionMode = .manual
+        Task {
+            do { try await vpn.select(node: n, mode: .manual) }
+            catch { self.error = error.localizedDescription }
         }
+    }
+
+    private func setSelectionMode(_ mode: ProxySelectionMode) {
+        store.selectionMode = mode
+        Task {
+            do { try await vpn.setSelectionMode(mode, node: store.selected) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+
+    private func restartTunnelForConfigurationChange() {
+        guard vpn.isConnected else { return }
+        Task { await vpn.reconfigure() }
+    }
+
+    private var categoryNames: [String] {
+        let present = Set(store.nodes.map(categoryName(for:)))
+        let common = ["V2Ray (VLESS / VMess)", "Shadowsocks", "Trojan", "Hysteria2"]
+        return common.filter { present.contains($0) } + present.subtracting(common).sorted()
+    }
+
+    private var visibleProtocolGroups: [ProxyNodeCategory] {
+        let names = protocolFilter == "全部" ? categoryNames : [protocolFilter]
+        return names.compactMap { name in
+            let matches = store.nodes.filter { categoryName(for: $0) == name }
+            return matches.isEmpty ? nil : ProxyNodeCategory(title: name, nodes: matches)
+        }
+    }
+
+    private func categoryName(for node: ProxyNode) -> String {
+        switch node.proto.lowercased() {
+        case "vless", "vmess": return "V2Ray (VLESS / VMess)"
+        case "ss", "shadowsocks": return "Shadowsocks"
+        case "trojan": return "Trojan"
+        case "hysteria2", "hy2": return "Hysteria2"
+        default: return "其他 · \(node.proto.uppercased())"
+        }
+    }
+
+    private func subscriptionName(for node: ProxyNode) -> String? {
+        guard let id = node.subscriptionID else { return nil }
+        return store.subscriptions.first(where: { $0.id == id })?.name ?? "已移除订阅"
     }
 
     private var testedLatencyCount: Int {
@@ -128,8 +252,6 @@ struct ProxyHomeView: View {
             return .red
         case .unreachable:
             return .red
-        case .unsupported:
-            return .secondary
         }
     }
 
@@ -139,27 +261,8 @@ struct ProxyHomeView: View {
         isRefreshingLatency = true
         latencyByNode = [:]
         defer { isRefreshingLatency = false }
-
-        let nodes = store.nodes
-        let results = await withTaskGroup(of: (UUID, ProxyProbeResult).self) { group in
-            var nextIndex = 0
-            var collected: [UUID: ProxyProbeResult] = [:]
-            for _ in 0..<min(8, nodes.count) {
-                let node = nodes[nextIndex]
-                nextIndex += 1
-                group.addTask { (node.id, await ProxyLatencyProbe.measure(node)) }
-            }
-            while let (id, result) = await group.next() {
-                collected[id] = result
-                if nextIndex < nodes.count {
-                    let node = nodes[nextIndex]
-                    nextIndex += 1
-                    group.addTask { (node.id, await ProxyLatencyProbe.measure(node)) }
-                }
-            }
-            return collected
-        }
-        latencyByNode = results
+        do { latencyByNode = try await vpn.measureNodeLatencies(nodes: store.nodes) }
+        catch { self.error = error.localizedDescription }
     }
 
     private func openShadowrocket(_ n: ProxyNode) {
@@ -169,6 +272,154 @@ struct ProxyHomeView: View {
            let url = URL(string: "shadowrocket://add/" + enc) {
             UIApplication.shared.open(url)
         }
+    }
+}
+
+struct ProxySubscriptionsView: View {
+    @ObservedObject private var store = ProxyStore.shared
+    @State private var refreshingID: UUID?
+    @State private var subscriptionToDelete: ProxySubscription?
+    @State private var showingDeleteChoices = false
+    @State private var error: String?
+
+    var body: some View {
+        List {
+            if store.subscriptions.isEmpty {
+                EmptyHint(text: "还没有订阅。通过“导入链接 / 订阅”添加订阅地址后，可在这里刷新或删除。")
+            }
+            ForEach(store.subscriptions) { subscription in
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(subscription.name).font(.headline)
+                        Text(subscription.url).font(.caption).foregroundColor(.secondary)
+                            .lineLimit(2).truncationMode(.middle)
+                        Text("\(store.nodes.filter { $0.subscriptionID == subscription.id }.count) 个节点")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        Task { await refresh(subscription) }
+                    } label: {
+                        if refreshingID == subscription.id {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(refreshingID != nil)
+                    .accessibilityLabel("刷新\(subscription.name)")
+                }
+                .swipeActions {
+                    Button("删除", role: .destructive) {
+                        subscriptionToDelete = subscription
+                        showingDeleteChoices = true
+                    }
+                }
+            }
+        }
+        .navigationTitle("代理订阅")
+        .confirmationDialog("删除订阅", isPresented: $showingDeleteChoices, titleVisibility: .visible) {
+            if let subscription = subscriptionToDelete {
+                let count = store.nodes.filter { $0.subscriptionID == subscription.id }.count
+                Button("删除订阅和 \(count) 个节点", role: .destructive) {
+                    store.deleteSubscription(subscription.id, removeNodes: true)
+                }
+                Button("仅删除订阅，保留节点") {
+                    store.deleteSubscription(subscription.id, removeNodes: false)
+                }
+            }
+            Button("取消", role: .cancel) { subscriptionToDelete = nil }
+        } message: {
+            Text("删除订阅后，可选择是否同时移除它导入的节点。")
+        }
+        .errorAlert($error)
+    }
+
+    @MainActor
+    private func refresh(_ subscription: ProxySubscription) async {
+        guard refreshingID == nil else { return }
+        refreshingID = subscription.id
+        defer { refreshingID = nil }
+        do {
+            let nodes = try await LinkParser.fetchSubscription(subscription.url)
+            store.importSubscription(url: subscription.url, nodes: nodes)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+struct ProxyRoutingRulesView: View {
+    @ObservedObject private var store = ProxyStore.shared
+
+    var body: some View {
+        List {
+            if store.routingRules.isEmpty {
+                EmptyHint(text: "添加域名后缀或 IP/CIDR 规则，指定流量走代理或直连。规则按列表顺序优先匹配。")
+            }
+            ForEach(store.routingRules) { rule in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(rule.value).font(.body.monospaced())
+                    Text("\(rule.kind.title) · \(rule.target.title)")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
+            .onDelete { store.routingRules.remove(atOffsets: $0) }
+        }
+        .navigationTitle("分流规则")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink {
+                    ProxyRoutingRuleEditor { rule in store.routingRules.append(rule) }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("添加分流规则")
+            }
+        }
+    }
+}
+
+struct ProxyRoutingRuleEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var kind: ProxyRoutingRuleKind = .domainSuffix
+    @State private var value = ""
+    @State private var target: ProxyRoutingTarget = .proxy
+    let onSave: (ProxyRoutingRule) -> Void
+
+    var body: some View {
+        Form {
+            Section(footer: Text("规则按顺序匹配；自定义规则优先于大陆常见域名直连。")) {
+                Picker("匹配类型", selection: $kind) {
+                    ForEach(ProxyRoutingRuleKind.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                TextField(kind.placeholder, text: $value)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Picker("流量去向", selection: $target) {
+                    ForEach(ProxyRoutingTarget.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+            }
+            Section {
+                Button("保存规则", action: save)
+                    .disabled(value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .navigationTitle("添加分流规则")
+    }
+
+    private func save() {
+        var normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if kind == .domainSuffix {
+            normalized = normalized.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        }
+        guard !normalized.isEmpty else { return }
+        onSave(ProxyRoutingRule(kind: kind, value: normalized, target: target))
+        dismiss()
     }
 }
 
@@ -285,15 +536,16 @@ struct ImportNodesView: View {
         defer { busy = false }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let nodes: [ProxyNode]
             if t.lowercased().hasPrefix("http://") || t.lowercased().hasPrefix("https://") {
-                nodes = try await LinkParser.fetchSubscription(t)
+                let nodes = try await LinkParser.fetchSubscription(t)
+                let subscription = store.importSubscription(url: t, nodes: nodes)
+                message = "已添加订阅「\(subscription.name)」，导入 \(nodes.count) 个节点"
             } else {
-                nodes = LinkParser.parseMany(t)
+                let nodes = LinkParser.parseMany(t)
+                if nodes.isEmpty { throw CFClientError.message("没有解析到可用节点") }
+                store.add(nodes)
+                message = "已导入 \(nodes.count) 个节点"
             }
-            if nodes.isEmpty { throw CFClientError.message("没有解析到可用节点") }
-            store.add(nodes)
-            message = "已导入 \(nodes.count) 个节点"
             text = ""
         } catch {
             self.error = error.localizedDescription

@@ -2,6 +2,46 @@ import Foundation
 
 // MARK: - 节点模型
 
+enum ProxySelectionMode: String, Codable, CaseIterable, Identifiable {
+    case manual
+    case automatic
+
+    var id: String { rawValue }
+    var title: String { self == .manual ? "手动选择" : "自动选择" }
+    var outboundTag: String { self == .manual ? "manual" : "auto" }
+}
+
+enum ProxyRoutingRuleKind: String, Codable, CaseIterable, Identifiable {
+    case domainSuffix
+    case ipCIDR
+
+    var id: String { rawValue }
+    var title: String { self == .domainSuffix ? "域名后缀" : "IP / CIDR" }
+    var placeholder: String { self == .domainSuffix ? "example.com" : "192.0.2.0/24" }
+}
+
+enum ProxyRoutingTarget: String, Codable, CaseIterable, Identifiable {
+    case proxy
+    case direct
+
+    var id: String { rawValue }
+    var title: String { self == .proxy ? "走代理" : "直连" }
+}
+
+struct ProxyRoutingRule: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var kind: ProxyRoutingRuleKind
+    var value: String
+    var target: ProxyRoutingTarget
+}
+
+struct ProxySubscription: Codable, Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var name: String
+    var url: String
+    var updatedAt = Date()
+}
+
 struct ProxyNode: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
     var name: String
@@ -11,6 +51,7 @@ struct ProxyNode: Codable, Identifiable, Hashable, Sendable {
     var secret: String           // uuid / password
     var params: [String: String] = [:]
     var raw: String = ""         // 原始分享链接（导入时保留）
+    var subscriptionID: UUID? = nil
 
     var detail: String { "\(proto.uppercased()) · \(server):\(port)" }
 
@@ -151,6 +192,8 @@ enum LinkParser {
 // MARK: - sing-box 配置（对应 sing-box 1.11 的配置格式）
 
 enum SingBoxConfig {
+    static let controlPort = 49173
+
     private static func tls(_ n: ProxyNode) -> [String: Any]? {
         let sec = n.p("security") ?? ((n.proto == "trojan" || n.proto == "hysteria2") ? "tls" : "none")
         guard sec == "tls" || sec == "reality" else { return nil }
@@ -229,13 +272,31 @@ enum SingBoxConfig {
                              "weibo.com", "zhihu.com", "douyin.com", "bytedance.com", "xiaohongshu.com",
                              "meituan.com", "mi.com", "xiaomi.com", "huawei.com", "sina.com.cn"]
 
-    static func build(node: ProxyNode, bypassCN: Bool) -> String {
+    static func nodeTag(_ node: ProxyNode) -> String {
+        "node-" + node.id.uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+    }
+
+    static func build(nodes: [ProxyNode], selectedID: UUID?, selectionMode: ProxySelectionMode,
+                      bypassCN: Bool, routingRules: [ProxyRoutingRule]) -> String {
+        let activeNodes = nodes
+        let nodeTags = activeNodes.map(nodeTag)
+        let selectedTag = activeNodes.first(where: { $0.id == selectedID }).map(nodeTag) ?? nodeTags.first ?? ""
         var routeRules: [[String: Any]] = [
             ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
         var dnsRules: [[String: Any]] = [["outbound": "any", "server": "dns-local"]]
+
+        for rule in routingRules where !rule.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let target = rule.target == .direct ? "direct" : "proxy"
+            switch rule.kind {
+            case .domainSuffix:
+                routeRules.append(["domain_suffix": [rule.value], "outbound": target])
+            case .ipCIDR:
+                routeRules.append(["ip_cidr": [rule.value], "outbound": target])
+            }
+        }
         if bypassCN {
             routeRules.append(["domain_suffix": cnSuffixes, "outbound": "direct"])
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
@@ -248,11 +309,20 @@ enum SingBoxConfig {
         let tun: [String: Any] = ["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "mtu": 9000,
                                   "auto_route": true, "strict_route": false, "stack": "gvisor"]
         let direct: [String: Any] = ["type": "direct", "tag": "direct"]
+        let manual: [String: Any] = ["type": "selector", "tag": "manual", "outbounds": nodeTags,
+                                     "default": selectedTag, "interrupt_exist_connections": true]
+        let automatic: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": nodeTags,
+                                        "url": "https://www.gstatic.com/generate_204", "interval": "10m",
+                                        "tolerance": 50, "interrupt_exist_connections": true]
+        let proxy: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": ["manual", "auto"],
+                                    "default": selectionMode.outboundTag, "interrupt_exist_connections": true]
         let route: [String: Any] = ["rules": routeRules, "final": "proxy", "auto_detect_interface": true]
         let log: [String: Any] = ["level": "warn", "timestamp": true]
+        let experimental: [String: Any] = ["clash_api": ["external_controller": "127.0.0.1:\(controlPort)"]]
         let cfg: [String: Any] = [
-            "log": log, "dns": dns, "inbounds": [tun],
-            "outbounds": [outbound(node, tag: "proxy"), direct],
+            "log": log, "dns": dns, "inbounds": [tun], "experimental": experimental,
+            "outbounds": activeNodes.enumerated().map { outbound($0.element, tag: nodeTags[$0.offset]) }
+                + [manual, automatic, proxy, direct],
             "route": route
         ]
         let data = (try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -267,20 +337,37 @@ final class ProxyStore: ObservableObject {
     static let shared = ProxyStore()
 
     @Published var nodes: [ProxyNode] = [] { didSet { save() } }
+    @Published var subscriptions: [ProxySubscription] = [] { didSet { saveSubscriptions() } }
     @Published var selectedID: UUID? {
         didSet { UserDefaults.standard.set(selectedID?.uuidString, forKey: "vpn_selected") }
+    }
+    @Published var selectionMode: ProxySelectionMode = .manual {
+        didSet { UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_selection_mode") }
     }
     @Published var bypassCN: Bool = true {
         didSet { UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass") }
     }
+    @Published var routingRules: [ProxyRoutingRule] = [] { didSet { saveRules() } }
 
     private static let key = "vpn.nodes"
+    private static let subscriptionsKey = "vpn.subscriptions"
+    private static let rulesKey = "vpn.routing_rules"
 
     init() {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
             nodes = arr
         }
+        if let d = Keychain.get(Self.subscriptionsKey),
+           let arr = try? JSONDecoder().decode([ProxySubscription].self, from: d) {
+            subscriptions = arr
+        }
+        if let d = Keychain.get(Self.rulesKey),
+           let arr = try? JSONDecoder().decode([ProxyRoutingRule].self, from: d) {
+            routingRules = arr
+        }
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
+        if let mode = UserDefaults.standard.string(forKey: "vpn_selection_mode"),
+           let decoded = ProxySelectionMode(rawValue: mode) { selectionMode = decoded }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
     }
 
@@ -288,6 +375,14 @@ final class ProxyStore: ObservableObject {
 
     private func save() {
         if let d = try? JSONEncoder().encode(nodes) { Keychain.set(d, key: Self.key) }
+    }
+
+    private func saveSubscriptions() {
+        if let d = try? JSONEncoder().encode(subscriptions) { Keychain.set(d, key: Self.subscriptionsKey) }
+    }
+
+    private func saveRules() {
+        if let d = try? JSONEncoder().encode(routingRules) { Keychain.set(d, key: Self.rulesKey) }
     }
 
     func add(_ node: ProxyNode, select: Bool = false) {
@@ -299,10 +394,54 @@ final class ProxyStore: ObservableObject {
         for n in list { add(n) }
     }
 
+    @discardableResult
+    func importSubscription(url: String, nodes importedNodes: [ProxyNode]) -> ProxySubscription {
+        let normalizedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existing = subscriptions.first { $0.url == normalizedURL }
+        let subscription = existing ?? ProxySubscription(
+            name: URLComponents(string: normalizedURL)?.host ?? "代理订阅",
+            url: normalizedURL
+        )
+        let removedIDs = Set(nodes.filter { $0.subscriptionID == subscription.id }.map(\.id))
+        nodes.removeAll { $0.subscriptionID == subscription.id }
+        var replacement = subscription
+        replacement.updatedAt = Date()
+        if existing == nil {
+            subscriptions.append(replacement)
+        } else if let index = subscriptions.firstIndex(where: { $0.id == subscription.id }) {
+            subscriptions[index] = replacement
+        }
+        let associatedNodes = importedNodes.map { node -> ProxyNode in
+            var node = node
+            node.subscriptionID = subscription.id
+            return node
+        }
+        nodes.append(contentsOf: associatedNodes)
+        if selectedID == nil || selectedID.map({ removedIDs.contains($0) }) == true {
+            selectedID = associatedNodes.first?.id ?? nodes.first?.id
+        }
+        return replacement
+    }
+
+    func deleteSubscription(_ id: UUID, removeNodes: Bool) {
+        subscriptions.removeAll { $0.id == id }
+        if removeNodes {
+            remove(ids: Set(nodes.filter { $0.subscriptionID == id }.map(\.id)))
+        } else {
+            for index in nodes.indices where nodes[index].subscriptionID == id {
+                nodes[index].subscriptionID = nil
+            }
+        }
+    }
+
+    func remove(ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        nodes.removeAll { ids.contains($0.id) }
+        if let selectedID, ids.contains(selectedID) { self.selectedID = nodes.first?.id }
+    }
+
     func remove(at offsets: IndexSet) {
-        let removed = offsets.map { nodes[$0].id }
-        nodes.remove(atOffsets: offsets)
-        if let s = selectedID, removed.contains(s) { selectedID = nodes.first?.id }
+        remove(ids: Set(offsets.map { nodes[$0].id }))
     }
 }
 
