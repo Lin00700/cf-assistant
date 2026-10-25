@@ -19,6 +19,7 @@ targets:
       - target: CFTunnel
         embed: true
     info:
+      path: CFAssistant-Info.plist
       properties:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
