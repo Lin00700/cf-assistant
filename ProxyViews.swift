@@ -73,6 +73,40 @@ private struct ProxyNodeRow: View {
     }
 }
 
+private struct ProxyNodeCategorySection: View {
+    let category: ProxyNodeCategory
+    let latencyByNode: [UUID: ProxyProbeResult]
+    let selectionMode: ProxySelectionMode
+    let selectedID: UUID?
+    let subscriptionName: (ProxyNode) -> String?
+    let onSelect: (ProxyNode) -> Void
+    let onEdit: (ProxyNode) -> Void
+    let onCopy: (ProxyNode) -> Void
+    let onDelete: (Set<UUID>) -> Void
+
+    var body: some View {
+        Section {
+            ForEach(category.nodes) { node in
+                ProxyNodeRow(
+                    node: node,
+                    subscriptionName: subscriptionName(node),
+                    latencyResult: latencyByNode[node.id],
+                    isSelected: selectionMode == .manual && node.id == selectedID,
+                    onSelect: { onSelect(node) },
+                    onEdit: { onEdit(node) },
+                    onCopy: { onCopy(node) }
+                )
+            }
+            .onDelete { offsets in
+                let ids = Set(offsets.map { category.nodes[$0].id })
+                onDelete(ids)
+            }
+        } header: {
+            Text("\(category.title)（\(category.nodes.count)）")
+        }
+    }
+}
+
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -152,24 +186,17 @@ struct ProxyHomeView: View {
             }
 
             ForEach(visibleProtocolGroups) { group in
-                Section {
-                    ForEach(group.nodes) { n in
-                        ProxyNodeRow(
-                            node: n,
-                            subscriptionName: subscriptionName(for: n),
-                            latencyResult: latencyByNode[n.id],
-                            isSelected: store.selectionMode == .manual && n.id == store.selected?.id,
-                            onSelect: { choose(n) },
-                            onEdit: { nodeBeingEdited = n },
-                            onCopy: { UIPasteboard.general.string = LinkParser.shareLink(n) }
-                        )
-                    }
-                    .onDelete { offsets in
-                        store.remove(ids: Set(offsets.map { group.nodes[$0].id }))
-                    }
-                } header: {
-                    Text("\(group.title)（\(group.nodes.count)）")
-                }
+                ProxyNodeCategorySection(
+                    category: group,
+                    latencyByNode: latencyByNode,
+                    selectionMode: store.selectionMode,
+                    selectedID: store.selected?.id,
+                    subscriptionName: { subscriptionName(for: $0) },
+                    onSelect: { choose($0) },
+                    onEdit: { nodeBeingEdited = $0 },
+                    onCopy: { UIPasteboard.general.string = LinkParser.shareLink($0) },
+                    onDelete: { store.remove(ids: $0) }
+                )
             }
 
             Section("添加节点") {
