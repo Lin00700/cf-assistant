@@ -10,6 +10,7 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
         case dnsAAAA
         case lanTCP
         case nodeTCP
+        case proxyHTTPS
         case tunnelIPTCP
         case ipv4
         case ipv6
@@ -21,6 +22,7 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             case .dnsAAAA: return "DNS · AAAA 记录"
             case .lanTCP: return "局域网 TCP · 手动目标"
             case .nodeTCP: return "节点 TCP · 地址/端口"
+            case .proxyHTTPS: return "代理 HTTPS · 指定节点"
             case .tunnelIPTCP: return "公网 TCP · 1.1.1.1:443"
             case .ipv4: return "IPv4 HTTPS"
             case .ipv6: return "IPv6 HTTPS"
@@ -34,10 +36,11 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             case .dnsAAAA: return 1
             case .lanTCP: return 2
             case .nodeTCP: return 3
-            case .tunnelIPTCP: return 4
-            case .ipv4: return 5
-            case .ipv6: return 6
-            case .http: return 7
+            case .proxyHTTPS: return 4
+            case .tunnelIPTCP: return 5
+            case .ipv4: return 6
+            case .ipv6: return 7
+            case .http: return 8
             }
         }
     }
@@ -95,7 +98,7 @@ struct ConnectivityDiagnosticRun: Codable, Identifiable, Sendable {
             "",
             "\(lines.joined(separator: "\n"))",
             "",
-            "说明：若填写了内网目标，局域网 TCP 测试会连接该 RFC1918 私有 IPv4 与端口；分享报告前请检查是否要公开内网或节点 IP。节点 TCP 测试对节点 IP 字面地址建立原始 TCP 连接，不进行代理协议握手，但仍遵循当前系统 VPN/分流路由；若节点地址是域名，找到 IP 仍需 DNS。公网 TCP 测试连接 1.1.1.1:443，使用当前系统网络路径及 VPN 分流规则。DNS 与 HTTPS 项保持原有测试方式。NAT64 或代理可能转换地址族，公网出口 IP 可能包含在结果中。"
+            "说明：DNS 项使用 iOS 系统解析器；节点 TCP、局域网 TCP 和 1.1.1.1:443 使用 Network.framework；IPv4/IPv6 HTTPS 与 Cloudflare HTTP 使用 URLSession，均按当时的 iOS 网络、VPN 和分流路径执行。它们不等同于“代理 HTTPS · 指定节点”：后者由 sing-box delay API 指定该节点访问 Cloudflare 探测 URL。该项成功只证明这一节点本次代理 HTTPS 出站成功，不保证系统 DNS、其他应用或局域网可用。若填写了内网目标，局域网 TCP 只测试该 RFC1918 地址和端口；未填写表示未测试，失败也只说明该目标/端口未连通。当前 sing-box 将 RFC1918 私有地址分流为 direct，但实际可达仍取决于本地网络路由、iOS 本地网络权限以及目标服务是否监听。分享前请检查是否要公开内网或节点 IP；公网出口 IP 可能包含在结果中。"
         ].compactMap { $0 }).joined(separator: "\n")
     }
 }
@@ -125,6 +128,46 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
         defer { isRunning = false }
 
         let startedAt = Date()
+        let proxyProbeTask = Task<ConnectivityProbeResult, Never> { @MainActor in
+            let probeStartedAt = DispatchTime.now().uptimeNanoseconds
+            guard let node else {
+                return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: 0,
+                                               detail: "没有可用的指定节点，未进行 sing-box HTTPS 代理探测")
+            }
+            guard VPNManager.shared.isConnected else {
+                return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: 0,
+                                               detail: "VPN 未连接，未进行 sing-box HTTPS 代理探测")
+            }
+            do {
+                let measurement = try await VPNManager.shared.measureProxyEgress(node: node)
+                let wallTime = Int((DispatchTime.now().uptimeNanoseconds - probeStartedAt) / 1_000_000)
+                switch measurement {
+                case .latency(let milliseconds):
+                    return ConnectivityProbeResult(
+                        kind: .proxyHTTPS,
+                        success: true,
+                        elapsedMilliseconds: milliseconds,
+                        detail: "sing-box 经指定节点 \(node.server):\(node.port) 成功访问 Cloudflare HTTPS 探测 URL；只证明该节点本次代理出站成功"
+                    )
+                case .probeFailed:
+                    return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
+                                                   detail: "sing-box 未成功完成此节点的 Cloudflare HTTPS 探测；不能据此断言节点原始 TCP 端口不通")
+                case .tcpLatency(let milliseconds):
+                    return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
+                                                   detail: "探测期间 VPN 状态变化，得到的是节点 TCP 端口延迟 \(milliseconds) ms，而非代理 HTTPS 结果")
+                case .unreachable:
+                    return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
+                                                   detail: "指定节点 HTTPS 探测未成功；这不是节点原始 TCP 端口测试")
+                case .requiresVPN:
+                    return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
+                                                   detail: "该节点协议需要 VPN 才能进行 HTTPS 代理探测")
+                }
+            } catch {
+                let elapsed = Int((DispatchTime.now().uptimeNanoseconds - probeStartedAt) / 1_000_000)
+                return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: elapsed,
+                                               detail: "无法访问 sing-box 节点探测接口：\(error.localizedDescription)")
+            }
+        }
         let results = await withTaskGroup(of: ConnectivityProbeResult.self) { group in
             group.addTask { await ConnectivityDiagnosticsModel.resolve(kind: .dnsA, family: AF_INET) }
             group.addTask { await ConnectivityDiagnosticsModel.resolve(kind: .dnsAAAA, family: AF_INET6) }
@@ -139,6 +182,7 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
 
             var completed: [ConnectivityProbeResult] = []
             for await result in group { completed.append(result) }
+            completed.append(await proxyProbeTask.value)
             return completed.sorted { $0.kind.displayOrder < $1.kind.displayOrder }
         }
 
@@ -417,7 +461,7 @@ struct ConnectivityDiagnosticsView: View {
                 .disabled(!vpn.isConnected || model.isRunning)
             } footer: {
                 Text(vpn.isConnected
-                     ? "同时测试 DNS、节点 IP/端口原始 TCP（仍遵循系统 VPN/分流路由），以及公网 IP 1.1.1.1:443（当前 VPN/分流路径）；原有 IPv4/IPv6 HTTPS 与 Cloudflare HTTP 检查也会保留。节点为域名时，解析节点 IP 仍依赖 DNS。"
+                     ? "同时测试系统 DNS、节点 IP/端口 TCP、公网 1.1.1.1:443 和系统 HTTPS；另用 sing-box 指定节点直接测试 Cloudflare HTTPS 代理出站。两类结果使用不同探测路径。节点为域名时，解析节点 IP 仍依赖系统 DNS。"
                      : "请先在“VPN 与节点”页连接内置 VPN，再运行诊断。")
             }
 

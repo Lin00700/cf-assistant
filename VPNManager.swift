@@ -141,4 +141,14 @@ final class VPNManager: ObservableObject {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         await set(on: true, store: store)
     }
+
+    /// 诊断单个节点的代理 HTTPS 出站，不触发自动选择组的重测或选点。
+    func measureProxyEgress(node: ProxyNode) async throws -> ProxyProbeResult {
+        guard isConnected else { throw CFClientError.message("VPN 未连接，无法进行代理 HTTPS 探测") }
+        let results = try await ProxyLatencyTester.measureViaSingBox(nodes: [node], controlURL: SingBoxConfig.controlURL)
+        guard let result = results[node.id] else {
+            throw CFClientError.message("sing-box 未返回指定节点的 HTTPS 探测结果")
+        }
+        return result
+    }
 }
