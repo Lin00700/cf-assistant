@@ -4,7 +4,6 @@ import NetworkExtension
 import Libbox
 
 // VPN 扩展：用 sing-box 的 Libbox 在 NEPacketTunnelProvider 里跑全局代理。
-// 按 sing-box 1.11 系列的 Libbox 接口编写；如果 Actions 里升级了版本，下面的接口签名可能需要跟着改。
 
 final class TunnelLog {
     static let shared = TunnelLog()
@@ -65,6 +64,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             TunnelLog.shared.add("[ext] config head: \(String(config.prefix(120)))…")
         }
 
+        // 从配置里抽出节点 / DNS 的 IPv4，后面从隧道路由里排除，避免系统把出站包又送回 utun
+        let excludeIPs = Self.collectExcludeIPv4(from: config)
+        TunnelLog.shared.add("[ext] 排除直连 IP: \(excludeIPs.joined(separator: ", "))")
+
         let setup = LibboxSetupOptions()
         setup.basePath = base.path
         setup.workingPath = work.path
@@ -78,7 +81,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         TunnelLog.shared.add("[ext] LibboxSetup OK")
 
-        let platform = TunnelPlatform(self)
+        let platform = TunnelPlatform(self, excludeIPv4: excludeIPs)
         self.platform = platform
 
         var err: NSError?
@@ -101,6 +104,32 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         TunnelLog.shared.add("[ext] sing-box 已启动")
     }
 
+    /// 解析 sing-box JSON，收集需要系统直连的 IPv4（节点 server + 常用 DNS）
+    private static func collectExcludeIPv4(from config: String) -> [String] {
+        var ips: Set<String> = ["223.5.5.5", "8.8.8.8", "1.1.1.1", "8.8.4.4"]
+        guard let data = config.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Array(ips).sorted()
+        }
+        if let outbounds = root["outbounds"] as? [[String: Any]] {
+            for o in outbounds {
+                if let server = o["server"] as? String, isIPv4(server) {
+                    ips.insert(server)
+                }
+            }
+        }
+        return Array(ips).sorted()
+    }
+
+    private static func isIPv4(_ s: String) -> Bool {
+        let parts = s.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        for p in parts {
+            guard let n = Int(p), (0...255).contains(n) else { return false }
+        }
+        return true
+    }
+
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         let body = TunnelLog.shared.text()
         completionHandler?(Data(body.utf8))
@@ -120,9 +149,11 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     private var monitor: NWPathMonitor?
     private var lastIfaceName: String = ""
     private var lastIfaceIndex: Int32 = -1
+    private let excludeIPv4: [String]
 
-    init(_ tunnel: NEPacketTunnelProvider) {
+    init(_ tunnel: NEPacketTunnelProvider, excludeIPv4: [String] = []) {
         self.tunnel = tunnel
+        self.excludeIPv4 = excludeIPv4
     }
 
     func stopMonitor() {
@@ -168,6 +199,11 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         let v4 = NEIPv4Settings(addresses: v4Addr, subnetMasks: v4Mask)
         v4.includedRoutes = [NEIPv4Route.default()]
+        // 节点 IP、公共 DNS 不进隧道：系统走物理网卡，避免黑洞
+        if !excludeIPv4.isEmpty {
+            v4.excludedRoutes = excludeIPv4.map { NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255") }
+            TunnelLog.shared.add("[ext] excludedRoutes=\(excludeIPv4.joined(separator: ","))")
+        }
         settings.ipv4Settings = v4
 
         let sem = DispatchSemaphore(value: 0)
@@ -274,7 +310,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     }
 
     private static func pickInterface(from path: Network.NWPath) -> Network.NWInterface? {
-        // 排除 utun/ipsec 等隧道网卡，否则默认出口会指回自己形成黑洞
         let ifaces = path.availableInterfaces.filter { iface in
             let n = iface.name.lowercased()
             if n.hasPrefix("utun") || n.hasPrefix("ipsec") || n.hasPrefix("ppp") { return false }
