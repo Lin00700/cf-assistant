@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - sing-box 配置（对应 sing-box 1.11 的配置格式）
-
 enum SingBoxConfig {
     private static func tls(_ n: ProxyNode) -> [String: Any]? {
         let sec = n.p("security") ?? ((n.proto == "trojan" || n.proto == "hysteria2") ? "tls" : "none")
@@ -98,7 +96,6 @@ enum SingBoxConfig {
             && !n.server.isEmpty && !n.secret.isEmpty && (1...65535).contains(n.port)
     }
 
-    /// 纯 IPv4 字面量才返回，用于把节点 IP 强制直连，避免进隧道绕圈
     private static func literalIPv4(_ host: String) -> String? {
         let parts = host.split(separator: ".")
         guard parts.count == 4 else { return nil }
@@ -129,7 +126,6 @@ enum SingBoxConfig {
             outbounds.append(selector)
         }
 
-        // 节点 IP 必须直连，否则连 SS 服务器本身也会进隧道黑洞
         var routeRules: [[String: Any]] = [
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
@@ -145,7 +141,6 @@ enum SingBoxConfig {
         }
 
         var dnsRules: [[String: Any]] = []
-
         for r in rules {
             let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
             if v.isEmpty { continue }
@@ -177,7 +172,8 @@ enum SingBoxConfig {
             "strategy": "prefer_ipv4",
             "independent_cache": true
         ]
-        let tun: [String: Any] = [
+        // 官方 Apple 客户端用 inet4_route_exclude_address 把节点 IP 踢出隧道
+        var tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],
             "mtu": 1500,
@@ -185,7 +181,9 @@ enum SingBoxConfig {
             "strict_route": false,
             "stack": "gvisor"
         ]
-        // iOS NE 上由平台监听上报默认网卡；auto_detect 在扩展里容易把流量黑洞
+        if !nodeIPs.isEmpty {
+            tun["inet4_route_exclude_address"] = nodeIPs
+        }
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
