@@ -129,12 +129,24 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        // 系统 DNS 直连公共解析器（不走隧道内 172.19.0.2），先把域名解析拉通
-        let dnsSettings = NEDNSSettings(servers: ["223.5.5.5", "8.8.8.8"])
-        dnsSettings.matchDomains = [""]
-        dnsSettings.matchDomainsNoSearch = true
-        settings.dnsSettings = dnsSettings
-        TunnelLog.shared.add("[ext] DNS=223.5.5.5,8.8.8.8 (system direct)")
+        // 让系统解析器使用 sing-box 提供的 DNS 地址，由 TUN 内的 DNS 劫持规则处理，
+        // 不把系统查询强制旁路到公共解析器（这在受限网络上可能无法直连）。
+        var dnsServers: [String] = []
+        if let dnsMode = options.getDNSMode(), dnsMode.value != LibboxDNSModeDisabled {
+            let dnsServerIterator = try options.getDNSServerAddress()
+            while dnsServerIterator.hasNext() {
+                dnsServers.append(dnsServerIterator.next())
+            }
+        }
+        if !dnsServers.isEmpty {
+            let dnsSettings = NEDNSSettings(servers: dnsServers)
+            dnsSettings.matchDomains = [""]
+            dnsSettings.matchDomainsNoSearch = true
+            settings.dnsSettings = dnsSettings
+            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServers.joined(separator: ","))")
+        } else {
+            TunnelLog.shared.add("[ext] Libbox DNS disabled or no DNS servers")
+        }
 
         var v4Addr: [String] = []
         var v4Mask: [String] = []
@@ -165,29 +177,52 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         v4.includedRoutes = ipv4Routes
 
-        // Libbox 排除 + 公共 DNS，保证解析与节点出站不进 utun 黑洞
-        var excludeSeen = Set<String>()
         var ipv4Exclude: [NEIPv4Route] = []
-        func addExclude(_ ip: String) {
-            guard !excludeSeen.contains(ip) else { return }
-            excludeSeen.insert(ip)
-            ipv4Exclude.append(NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255"))
-        }
         if let it = options.getInet4RouteExcludeAddress() {
             while it.hasNext() {
                 if let p = it.next() {
-                    let addr = p.address()
-                    excludeSeen.insert(addr)
-                    ipv4Exclude.append(NEIPv4Route(destinationAddress: addr, subnetMask: p.mask()))
+                    ipv4Exclude.append(NEIPv4Route(destinationAddress: p.address(), subnetMask: p.mask()))
                 }
             }
         }
-        for ip in ["223.5.5.5", "8.8.8.8", "8.8.4.4", "1.1.1.1"] {
-            addExclude(ip)
-        }
         v4.excludedRoutes = ipv4Exclude
-        TunnelLog.shared.add("[ext] excludedRoutes=\(excludeSeen.sorted().joined(separator: ","))")
         settings.ipv4Settings = v4
+        TunnelLog.shared.add("[ext] IPv4 routes included=\(ipv4Routes.count) excluded=\(ipv4Exclude.count)")
+
+        var v6Addr: [String] = []
+        var v6Prefixes: [NSNumber] = []
+        if let it = options.getInet6Address() {
+            while it.hasNext() {
+                if let p = it.next() {
+                    v6Addr.append(p.address())
+                    v6Prefixes.append(NSNumber(value: p.prefix()))
+                }
+            }
+        }
+        let v6 = NEIPv6Settings(addresses: v6Addr, networkPrefixLengths: v6Prefixes)
+        var ipv6Routes: [NEIPv6Route] = []
+        if let it = options.getInet6RouteAddress() {
+            while it.hasNext() {
+                if let p = it.next() {
+                    ipv6Routes.append(NEIPv6Route(destinationAddress: p.address(), networkPrefixLength: NSNumber(value: p.prefix())))
+                }
+            }
+        }
+        if ipv6Routes.isEmpty {
+            ipv6Routes = [NEIPv6Route.default()]
+        }
+        v6.includedRoutes = ipv6Routes
+        var ipv6Exclude: [NEIPv6Route] = []
+        if let it = options.getInet6RouteExcludeAddress() {
+            while it.hasNext() {
+                if let p = it.next() {
+                    ipv6Exclude.append(NEIPv6Route(destinationAddress: p.address(), networkPrefixLength: NSNumber(value: p.prefix())))
+                }
+            }
+        }
+        v6.excludedRoutes = ipv6Exclude
+        settings.ipv6Settings = v6
+        TunnelLog.shared.add("[ext] IPv6 routes included=\(ipv6Routes.count) excluded=\(ipv6Exclude.count)")
 
         let sem = DispatchSemaphore(value: 0)
         var setErr: Error?

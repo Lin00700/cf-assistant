@@ -23,7 +23,7 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             case .lanTCP: return "局域网 TCP · 手动目标"
             case .nodeTCP: return "节点 TCP · 地址/端口"
             case .proxyHTTPS: return "代理 HTTPS · 指定节点"
-            case .tunnelIPTCP: return "公网 TCP · 1.1.1.1:443"
+            case .tunnelIPTCP: return "Network.framework TCP · 1.1.1.1:443"
             case .ipv4: return "IPv4 HTTPS"
             case .ipv6: return "IPv6 HTTPS"
             case .http: return "HTTP · Cloudflare"
@@ -98,7 +98,7 @@ struct ConnectivityDiagnosticRun: Codable, Identifiable, Sendable {
             "",
             "\(lines.joined(separator: "\n"))",
             "",
-            "说明：DNS 项使用 iOS 系统解析器；节点 TCP、局域网 TCP 和 1.1.1.1:443 使用 Network.framework；IPv4/IPv6 HTTPS 与 Cloudflare HTTP 使用 URLSession，均按当时的 iOS 网络、VPN 和分流路径执行。它们不等同于“代理 HTTPS · 指定节点”：后者由 sing-box delay API 指定该节点访问 Cloudflare 探测 URL。该项成功只证明这一节点本次代理 HTTPS 出站成功，不保证系统 DNS、其他应用或局域网可用。若填写了内网目标，局域网 TCP 只测试该 RFC1918 地址和端口；未填写表示未测试，失败也只说明该目标/端口未连通。当前 sing-box 将 RFC1918 私有地址分流为 direct，但实际可达仍取决于本地网络路由、iOS 本地网络权限以及目标服务是否监听。分享前请检查是否要公开内网或节点 IP；公网出口 IP 可能包含在结果中。"
+            "说明：DNS 项使用 iOS 系统解析器；节点 TCP、局域网 TCP 和 1.1.1.1:443 使用 Network.framework；IPv4/IPv6 HTTPS 与 Cloudflare HTTP 使用 URLSession，但这些 API 的具体路由可能不同，不能据此断定普通应用流量是否经 TUN。它们不等同于“代理 HTTPS · 指定节点”：后者由 sing-box delay API 指定该节点访问 Cloudflare 探测 URL。该项成功只证明这一节点本次代理 HTTPS 出站成功，不保证系统 DNS、其他应用或局域网可用。若填写了内网目标，局域网 TCP 只测试该 RFC1918 地址和端口；未填写表示未测试，失败也只说明该目标/端口未连通。当前 sing-box 将 RFC1918 私有地址分流为 direct，但实际可达仍取决于本地网络路由、iOS 本地网络权限以及目标服务是否监听。分享前请检查是否要公开内网或节点 IP；公网出口 IP 可能包含在结果中。"
         ].compactMap { $0 }).joined(separator: "\n")
     }
 }
@@ -288,12 +288,12 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             let outcome = await openTCP(host: address, port: node.port, timeout: 4)
             if outcome.success {
                 return ConnectivityProbeResult(kind: .nodeTCP, success: true, elapsedMilliseconds: elapsed(),
-                                                detail: "TCP 连接成功 · \(address):\(node.port)")
+                                                detail: "Network.framework 原始 TCP 连接成功 · \(address):\(node.port)")
             }
             lastFailure = "\(address):\(node.port) · \(outcome.detail)"
         }
         return ConnectivityProbeResult(kind: .nodeTCP, success: false, elapsedMilliseconds: elapsed(),
-                                        detail: "节点 TCP 连接失败 · \(lastFailure)")
+                                        detail: "Network.framework · 节点 TCP 连接失败 · \(lastFailure)")
     }
 
     private nonisolated static func probeLANIPv4TCP(address: String, portText: String) async -> ConnectivityProbeResult {
@@ -314,8 +314,8 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             success: outcome.success,
             elapsedMilliseconds: elapsed,
             detail: outcome.success
-                ? "TCP 连接成功 · \(ip):\(port)"
-                : "\(ip):\(port) TCP 连接失败 · \(outcome.detail)"
+                ? "Network.framework 原始 TCP 连接成功 · \(ip):\(port)"
+                : "Network.framework · \(ip):\(port) TCP 连接失败 · \(outcome.detail)"
         )
     }
 
@@ -328,8 +328,8 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             success: outcome.success,
             elapsedMilliseconds: elapsed,
             detail: outcome.success
-                ? "TCP 连接成功 · 1.1.1.1:443（当前系统网络/VPN 分流路径）"
-                : "1.1.1.1:443 TCP 连接失败 · \(outcome.detail)"
+                ? "Network.framework 原始 TCP 连接成功 · 1.1.1.1:443"
+                : "Network.framework · 1.1.1.1:443 TCP 连接失败 · \(outcome.detail)"
         )
     }
 
@@ -461,7 +461,7 @@ struct ConnectivityDiagnosticsView: View {
                 .disabled(!vpn.isConnected || model.isRunning)
             } footer: {
                 Text(vpn.isConnected
-                     ? "同时测试系统 DNS、节点 IP/端口 TCP、公网 1.1.1.1:443 和系统 HTTPS；另用 sing-box 指定节点直接测试 Cloudflare HTTPS 代理出站。两类结果使用不同探测路径。节点为域名时，解析节点 IP 仍依赖系统 DNS。"
+                     ? "同时测试系统 DNS、Network.framework 原始 TCP、URLSession HTTPS；另用 sing-box 指定节点直接测试 Cloudflare HTTPS 代理出站。Network.framework 探测不保证与 URLSession 或其他应用走同一路径。节点为域名时，解析节点 IP 仍依赖系统 DNS。"
                      : "请先在“VPN 与节点”页连接内置 VPN，再运行诊断。")
             }
 
