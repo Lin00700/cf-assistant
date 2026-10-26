@@ -2,11 +2,15 @@ import SwiftUI
 import Foundation
 import Darwin
 import NetworkExtension
+import Network
 
 struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
         case dnsA
         case dnsAAAA
+        case lanTCP
+        case nodeTCP
+        case tunnelIPTCP
         case ipv4
         case ipv6
         case http
@@ -15,9 +19,25 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             switch self {
             case .dnsA: return "DNS · A 记录"
             case .dnsAAAA: return "DNS · AAAA 记录"
+            case .lanTCP: return "局域网 TCP · 手动目标"
+            case .nodeTCP: return "节点 TCP · 地址/端口"
+            case .tunnelIPTCP: return "公网 TCP · 1.1.1.1:443"
             case .ipv4: return "IPv4 HTTPS"
             case .ipv6: return "IPv6 HTTPS"
             case .http: return "HTTP · Cloudflare"
+            }
+        }
+
+        var displayOrder: Int {
+            switch self {
+            case .dnsA: return 0
+            case .dnsAAAA: return 1
+            case .lanTCP: return 2
+            case .nodeTCP: return 3
+            case .tunnelIPTCP: return 4
+            case .ipv4: return 5
+            case .ipv6: return 6
+            case .http: return 7
             }
         }
     }
@@ -75,7 +95,7 @@ struct ConnectivityDiagnosticRun: Codable, Identifiable, Sendable {
             "",
             "\(lines.joined(separator: "\n"))",
             "",
-            "说明：测试通过当前系统网络路径及分流规则发起；NAT64 或代理可能转换地址族，公网出口 IP 可能包含在结果中。"
+            "说明：若填写了内网目标，局域网 TCP 测试会连接该 RFC1918 私有 IPv4 与端口；分享报告前请检查是否要公开内网或节点 IP。节点 TCP 测试对节点 IP 字面地址建立原始 TCP 连接，不进行代理协议握手，但仍遵循当前系统 VPN/分流路由；若节点地址是域名，找到 IP 仍需 DNS。公网 TCP 测试连接 1.1.1.1:443，使用当前系统网络路径及 VPN 分流规则。DNS 与 HTTPS 项保持原有测试方式。NAT64 或代理可能转换地址族，公网出口 IP 可能包含在结果中。"
         ].compactMap { $0 }).joined(separator: "\n")
     }
 }
@@ -98,7 +118,7 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
         }
     }
 
-    func run(vpnStatus: String, nodeProtocol: String) async {
+    func run(vpnStatus: String, nodeProtocol: String, node: ProxyNode?, lanIPv4: String, lanPort: String) async {
         guard !isRunning else { return }
         isRunning = true
         vpnInterrupted = false
@@ -108,13 +128,18 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
         let results = await withTaskGroup(of: ConnectivityProbeResult.self) { group in
             group.addTask { await ConnectivityDiagnosticsModel.resolve(kind: .dnsA, family: AF_INET) }
             group.addTask { await ConnectivityDiagnosticsModel.resolve(kind: .dnsAAAA, family: AF_INET6) }
+            if !lanIPv4.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                group.addTask { await ConnectivityDiagnosticsModel.probeLANIPv4TCP(address: lanIPv4, portText: lanPort) }
+            }
+            group.addTask { await ConnectivityDiagnosticsModel.probeNodeTCP(node: node) }
+            group.addTask { await ConnectivityDiagnosticsModel.probeTunnelIPTCP() }
             group.addTask { await ConnectivityDiagnosticsModel.fetch(kind: .ipv4, url: "https://ipv4.icanhazip.com/") }
             group.addTask { await ConnectivityDiagnosticsModel.fetch(kind: .ipv6, url: "https://ipv6.icanhazip.com/") }
             group.addTask { await ConnectivityDiagnosticsModel.fetch(kind: .http, url: "https://www.cloudflare.com/cdn-cgi/trace") }
 
             var completed: [ConnectivityProbeResult] = []
             for await result in group { completed.append(result) }
-            return completed.sorted { $0.kind.rawValue < $1.kind.rawValue }
+            return completed.sorted { $0.kind.displayOrder < $1.kind.displayOrder }
         }
 
         let run = ConnectivityDiagnosticRun(
@@ -189,6 +214,89 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
         return addresses
     }
 
+    private nonisolated static func probeNodeTCP(node: ProxyNode?) async -> ConnectivityProbeResult {
+        let start = DispatchTime.now().uptimeNanoseconds
+        guard let node else {
+            return ConnectivityProbeResult(kind: .nodeTCP, success: false, elapsedMilliseconds: 0,
+                                            detail: "没有可用的当前节点，未测试节点端口")
+        }
+        guard (1...65535).contains(node.port) else {
+            return ConnectivityProbeResult(kind: .nodeTCP, success: false, elapsedMilliseconds: 0,
+                                            detail: "节点端口无效：\(node.port)")
+        }
+
+        let addresses: [String]
+        if isValidIPAddress(node.server, family: AF_INET) || isValidIPAddress(node.server, family: AF_INET6) {
+            addresses = [node.server]
+        } else {
+            addresses = await Task.detached(priority: .utility) {
+                Self.resolveAddresses(host: node.server, family: AF_UNSPEC)
+            }.value
+        }
+        let elapsed = { Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000) }
+        guard !addresses.isEmpty else {
+            return ConnectivityProbeResult(kind: .nodeTCP, success: false, elapsedMilliseconds: elapsed(),
+                                            detail: "节点域名 \(node.server) 未解析出 IP；节点端口未测到，请结合 DNS 结果判断")
+        }
+
+        var lastFailure = "连接失败"
+        for address in addresses.prefix(2) {
+            let outcome = await openTCP(host: address, port: node.port, timeout: 4)
+            if outcome.success {
+                return ConnectivityProbeResult(kind: .nodeTCP, success: true, elapsedMilliseconds: elapsed(),
+                                                detail: "TCP 连接成功 · \(address):\(node.port)")
+            }
+            lastFailure = "\(address):\(node.port) · \(outcome.detail)"
+        }
+        return ConnectivityProbeResult(kind: .nodeTCP, success: false, elapsedMilliseconds: elapsed(),
+                                        detail: "节点 TCP 连接失败 · \(lastFailure)")
+    }
+
+    private nonisolated static func probeLANIPv4TCP(address: String, portText: String) async -> ConnectivityProbeResult {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let ip = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isPrivateIPv4Address(ip) else {
+            return ConnectivityProbeResult(kind: .lanTCP, success: false, elapsedMilliseconds: 0,
+                                            detail: "请输入 RFC1918 私有 IPv4（10.x、172.16–31.x 或 192.168.x）；未连接目标")
+        }
+        guard let port = Int(portText.trimmingCharacters(in: .whitespacesAndNewlines)), (1...65535).contains(port) else {
+            return ConnectivityProbeResult(kind: .lanTCP, success: false, elapsedMilliseconds: 0,
+                                            detail: "内网 TCP 端口无效：请输入 1–65535")
+        }
+        let outcome = await openTCP(host: ip, port: port, timeout: 4)
+        let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        return ConnectivityProbeResult(
+            kind: .lanTCP,
+            success: outcome.success,
+            elapsedMilliseconds: elapsed,
+            detail: outcome.success
+                ? "TCP 连接成功 · \(ip):\(port)"
+                : "\(ip):\(port) TCP 连接失败 · \(outcome.detail)"
+        )
+    }
+
+    private nonisolated static func probeTunnelIPTCP() async -> ConnectivityProbeResult {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let outcome = await openTCP(host: "1.1.1.1", port: 443, timeout: 7)
+        let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        return ConnectivityProbeResult(
+            kind: .tunnelIPTCP,
+            success: outcome.success,
+            elapsedMilliseconds: elapsed,
+            detail: outcome.success
+                ? "TCP 连接成功 · 1.1.1.1:443（当前系统网络/VPN 分流路径）"
+                : "1.1.1.1:443 TCP 连接失败 · \(outcome.detail)"
+        )
+    }
+
+    private nonisolated static func openTCP(host: String, port: Int, timeout: TimeInterval) async -> TCPConnectionOutcome {
+        guard let rawPort = UInt16(exactly: port), let nwPort = NWEndpoint.Port(rawValue: rawPort) else {
+            return TCPConnectionOutcome(success: false, detail: "端口无效")
+        }
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
+        return await TCPProbeOperation(connection: connection).run(timeout: timeout)
+    }
+
     private nonisolated static func fetch(kind: ConnectivityProbeResult.Kind, url urlText: String) async -> ConnectivityProbeResult {
         let start = DispatchTime.now().uptimeNanoseconds
         guard let url = URL(string: urlText) else {
@@ -259,12 +367,24 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             return inet_pton(AF_INET6, addressString, &address) == 1
         }
     }
+
+    private nonisolated static func isPrivateIPv4Address(_ value: String) -> Bool {
+        var address = in_addr()
+        guard value.withCString({ inet_pton(AF_INET, $0, &address) }) == 1 else { return false }
+        let octets = value.split(separator: ".").compactMap { UInt8($0) }
+        guard octets.count == 4 else { return false }
+        return octets[0] == 10
+            || (octets[0] == 172 && (16...31).contains(octets[1]))
+            || (octets[0] == 192 && octets[1] == 168)
+    }
 }
 
 struct ConnectivityDiagnosticsView: View {
     @ObservedObject private var vpn = VPNManager.shared
     @StateObject private var model = ConnectivityDiagnosticsModel()
     @State private var showingClearConfirmation = false
+    @State private var lanIPv4 = ""
+    @State private var lanPort = "80"
 
     var body: some View {
         List {
@@ -275,7 +395,14 @@ struct ConnectivityDiagnosticsView: View {
                     Text(vpn.statusText).foregroundColor(vpn.isConnected ? .green : .secondary)
                 }
                 Button {
-                    Task { await model.run(vpnStatus: vpn.statusText, nodeProtocol: ProxyStore.shared.selected?.proto.uppercased() ?? "未知") }
+                    Task {
+                        let node = ProxyStore.shared.selected
+                        await model.run(vpnStatus: vpn.statusText,
+                                        nodeProtocol: node?.proto.uppercased() ?? "未知",
+                                        node: node,
+                                        lanIPv4: lanIPv4,
+                                        lanPort: lanPort)
+                    }
                 } label: {
                     HStack {
                         Spacer()
@@ -290,8 +417,26 @@ struct ConnectivityDiagnosticsView: View {
                 .disabled(!vpn.isConnected || model.isRunning)
             } footer: {
                 Text(vpn.isConnected
-                     ? "按当前系统网络路径和分流规则测试 DNS A/AAAA、IPv4/IPv6 HTTPS 和 Cloudflare HTTP。"
+                     ? "同时测试 DNS、节点 IP/端口原始 TCP（仍遵循系统 VPN/分流路由），以及公网 IP 1.1.1.1:443（当前 VPN/分流路径）；原有 IPv4/IPv6 HTTPS 与 Cloudflare HTTP 检查也会保留。节点为域名时，解析节点 IP 仍依赖 DNS。"
                      : "请先在“VPN 与节点”页连接内置 VPN，再运行诊断。")
+            }
+
+            Section("局域网（可选）") {
+                TextField("内网 IPv4，例如 192.168.1.10", text: $lanIPv4)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+                HStack {
+                    Text("TCP 端口")
+                    Spacer()
+                    TextField("80", text: $lanPort)
+                        .keyboardType(.numberPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                }
+                Text("填写一个已知有服务监听的内网设备 IPv4 和端口；留空地址则跳过。只接受 10.x、172.16–31.x、192.168.x。目标端口未开放也会失败，不能据此单独断定整个局域网都不可达。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             if !model.runs.isEmpty {
@@ -344,7 +489,7 @@ struct ConnectivityDiagnosticsView: View {
             }
 
             Section {
-                Text("报告保存在本机，最多保留最近 10 次。分享内容包括测试结果和观测到的公网出口 IP；请先预览并确认后再发送。分流规则可能令个别探测直连，NAT64 或代理节点也可能转换地址族。")
+                Text("报告保存在本机，最多保留最近 10 次。分享内容可能包含节点 IP、填写的内网 IP/端口和观测到的公网出口 IP；请先预览再发送。iOS 可能要求授予本地网络权限；系统不提供通用方式自动发现网关，因此需要手动填写内网目标。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -359,5 +504,62 @@ struct ConnectivityDiagnosticsView: View {
             Button("清空", role: .destructive) { model.clearHistory() }
             Button("取消", role: .cancel) {}
         }
+    }
+}
+
+private struct TCPConnectionOutcome: Sendable {
+    let success: Bool
+    let detail: String
+}
+
+private final class TCPProbeOperation: @unchecked Sendable {
+    private let connection: NWConnection
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<TCPConnectionOutcome, Never>?
+    private var finished = false
+
+    init(connection: NWConnection) {
+        self.connection = connection
+    }
+
+    func run(timeout: TimeInterval) async -> TCPConnectionOutcome {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+
+            connection.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready:
+                    self?.finish(TCPConnectionOutcome(success: true, detail: "TCP 握手成功"))
+                case .failed(let error):
+                    self?.finish(TCPConnectionOutcome(success: false, detail: error.localizedDescription))
+                case .cancelled:
+                    self?.finish(TCPConnectionOutcome(success: false, detail: "连接已取消"))
+                default:
+                    break
+                }
+            }
+            connection.start(queue: DispatchQueue.global(qos: .utility))
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { [weak self] in
+                self?.finish(TCPConnectionOutcome(success: false, detail: "连接超时（\(Int(timeout)) 秒）"))
+            }
+        }
+    }
+
+    private func finish(_ outcome: TCPConnectionOutcome) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        connection.stateUpdateHandler = nil
+        connection.cancel()
+        continuation?.resume(returning: outcome)
     }
 }
