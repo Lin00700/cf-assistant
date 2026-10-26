@@ -191,7 +191,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         throw NSError(domain: "CFTunnel", code: 7, userInfo: [NSLocalizedDescriptionKey: "unsupported"])
     }
 
-    func underNetworkExtension() -> Bool { true }
+    func underNetworkExtension() -> Bool { false }
     func includeAllNetworks() -> Bool { false }
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
