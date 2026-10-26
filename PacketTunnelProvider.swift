@@ -141,7 +141,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
 
     // MARK: 平台能力
 
-    func usePlatformAutoDetectControl() -> Bool { true }
+    func usePlatformAutoDetectControl() -> Bool { false }
     func autoDetectControl(_ fd: Int32) throws {}
 
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32,
@@ -191,7 +191,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         throw NSError(domain: "CFTunnel", code: 7, userInfo: [NSLocalizedDescriptionKey: "unsupported"])
     }
 
-    func underNetworkExtension() -> Bool { false }
+    func underNetworkExtension() -> Bool { true }
     func includeAllNetworks() -> Bool { false }
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
