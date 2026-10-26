@@ -24,6 +24,8 @@ private struct ProxyNodeLatencyLabel: View {
             return .red
         case .unreachable:
             return .red
+        case .probeFailed:
+            return .orange
         case .requiresVPN:
             return .secondary
         }
@@ -166,7 +168,7 @@ private struct ProxyNodeListSection: View {
             }
         } footer: {
             Text(isVPNConnected
-                 ? "开启 VPN 时会逐个节点发起 HTTPS 探测，显示包含代理协议握手和目标请求时间的真实代理延迟。左滑节点可编辑地址、端口等设置。"
+                 ? "开启 VPN 时会逐个节点通过 HTTPS（Cloudflare）探测真实代理延迟；“探测失败”不等于节点失效。左滑节点可编辑地址、端口等设置。"
                  : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可连及建连延迟，不代表代理握手或实际出站速度；Hysteria2 使用 UDP，需连接 VPN 才能准确测试。左滑节点可编辑地址、端口等设置。")
         }
     }
@@ -544,17 +546,27 @@ struct ProxyNodeEditorView: View {
                 }
             }
 
-            Section("TLS 与传输") {
-                parameterField("安全方式 (none / tls / reality)", key: "security")
-                parameterField("SNI / TLS 域名", key: "sni")
-                parameterField("TLS Peer", key: "peer")
-                parameterField("ALPN（逗号分隔）", key: "alpn")
-                parameterField("客户端指纹", key: "fp")
-                parameterField("传输类型 (tcp / ws / grpc)", key: "type")
-                parameterField("Host", key: "host")
-                parameterField("路径", key: "path")
-                parameterField("gRPC 服务名", key: "serviceName")
-                Toggle("跳过 TLS 证书验证", isOn: insecureBinding)
+            if draft.proto == "hysteria2" || draft.proto == "hy2" {
+                Section("TLS / QUIC") {
+                    Text("Hysteria2 默认启用 TLS + QUIC。SNI 未指定时使用服务器地址；混淆参数可选，WS / gRPC 传输项不适用。")
+                        .font(.footnote).foregroundColor(.secondary)
+                    parameterField("SNI / TLS 域名", key: "sni")
+                    parameterField("ALPN（逗号分隔）", key: "alpn")
+                    Toggle("跳过 TLS 证书验证", isOn: insecureBinding)
+                }
+            } else {
+                Section("TLS 与传输") {
+                    parameterField("安全方式 (none / tls / reality)", key: "security")
+                    parameterField("SNI / TLS 域名", key: "sni")
+                    parameterField("TLS Peer", key: "peer")
+                    parameterField("ALPN（逗号分隔）", key: "alpn")
+                    parameterField("客户端指纹", key: "fp")
+                    parameterField("传输类型 (tcp / ws / grpc)", key: "type")
+                    parameterField("Host", key: "host")
+                    parameterField("路径", key: "path")
+                    parameterField("gRPC 服务名", key: "serviceName")
+                    Toggle("跳过 TLS 证书验证", isOn: insecureBinding)
+                }
             }
 
             if draft.subscriptionID != nil {

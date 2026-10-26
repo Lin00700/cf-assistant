@@ -127,50 +127,19 @@ final class VPNManager: ObservableObject {
         try await updateSelector(tag: "proxy", outbound: mode.outboundTag)
     }
 
-    /// VPN 已连接时测真实代理请求；未连接时测 TCP 节点端口连通性。
+    /// VPN 已连接时逐节点测真实代理请求；未连接时测 TCP 节点端口连通性。
     func measureNodeLatencies(nodes: [ProxyNode]) async throws -> [UUID: ProxyProbeResult] {
         guard !nodes.isEmpty else { return [:] }
         guard isConnected else {
             return await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
         }
-
-        let manualDelayURL = clashAPI.appendingPathComponent("group")
-            .appendingPathComponent("manual").appendingPathComponent("delay")
-        var components = URLComponents(url: manualDelayURL,
-                                       resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "url", value: "https://www.gstatic.com/generate_204"),
-            URLQueryItem(name: "timeout", value: "20000")
-        ]
-        guard let url = components.url else { throw CFClientError.message("无法构造延迟测试请求") }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 24
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw CFClientError.message("sing-box 延迟测试失败（HTTP \(status)）；请确认 VPN 已完全连接后重试")
+        let results = try await ProxyLatencyTester.measureViaSingBox(nodes: nodes, controlURL: clashAPI)
+        // The auto-group delay endpoint retests nodes without successful history; avoid duplicating failed probes.
+        if ProxyStore.shared.selectionMode == .automatic,
+           results.values.allSatisfy({ if case .latency = $0 { return true }; return false }) {
+            await recalculateAutomaticSelection()
         }
-        let values = try JSONDecoder().decode([String: Int].self, from: data)
-        let latencyByTag = Dictionary(uniqueKeysWithValues: values.map { ($0.key, $0.value) })
-
-        // The selector probe above refreshes shared URL-test history for every node.
-        // Ask the auto group to recalculate its winner from those fresh measurements.
-        let autoDelayURL = clashAPI.appendingPathComponent("group")
-            .appendingPathComponent("auto").appendingPathComponent("delay")
-        var autoComponents = URLComponents(url: autoDelayURL,
-                                           resolvingAgainstBaseURL: false)!
-        autoComponents.queryItems = components.queryItems
-        guard let autoURL = autoComponents.url else { throw CFClientError.message("无法构造自动选优请求") }
-        var autoRequest = URLRequest(url: autoURL)
-        autoRequest.timeoutInterval = 12
-        let (_, autoResponse) = try await URLSession.shared.data(for: autoRequest)
-        guard let autoHTTP = autoResponse as? HTTPURLResponse, (200..<300).contains(autoHTTP.statusCode) else {
-            let status = (autoResponse as? HTTPURLResponse)?.statusCode ?? -1
-            throw CFClientError.message("自动节点组选优失败（HTTP \(status)）")
-        }
-        return Dictionary(uniqueKeysWithValues: nodes.map { node in
-            (node.id, ProxyProbeResult.from(milliseconds: latencyByTag[SingBoxConfig.nodeTag(node)]))
-        })
+        return results
     }
 
     /// 节点列表、分流规则或大陆直连选项变更时重启隧道以载入新配置。
@@ -186,6 +155,20 @@ final class VPNManager: ObservableObject {
             if manager?.connection.status == .disconnected { break }
         }
         await set(on: true, node: node, bypassCN: ProxyStore.shared.bypassCN)
+    }
+
+    private func recalculateAutomaticSelection() async {
+        let autoDelayURL = clashAPI.appendingPathComponent("group")
+            .appendingPathComponent("auto").appendingPathComponent("delay")
+        guard var components = URLComponents(url: autoDelayURL, resolvingAgainstBaseURL: false) else { return }
+        components.queryItems = [
+            URLQueryItem(name: "url", value: SingBoxConfig.nodeProbeURL),
+            URLQueryItem(name: "timeout", value: "3000")
+        ]
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     private func updateSelector(tag: String, outbound: String) async throws {

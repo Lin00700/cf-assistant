@@ -57,8 +57,10 @@ struct ProxyNode: Codable, Identifiable, Hashable, Sendable {
     var detail: String { "\(proto.uppercased()) · \(server):\(port)" }
 
     func p(_ k: String) -> String? {
-        guard let v = params[k], !v.isEmpty else { return nil }
-        return v
+        let value = params[k] ?? params[k.lowercased()]
+            ?? params.first(where: { $0.key.caseInsensitiveCompare(k) == .orderedSame })?.value
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }
 
@@ -113,8 +115,18 @@ enum LinkParser {
         }
         guard let c = URLComponents(string: main), let host = c.host, !host.isEmpty else { return nil }
         var p: [String: String] = [:]
-        for q in c.queryItems ?? [] { p[q.name] = q.value ?? "" }
-        let secret = c.user?.removingPercentEncoding ?? c.user ?? ""
+        for q in c.queryItems ?? [] {
+            let key = proto == "hysteria2" ? q.name.lowercased() : q.name
+            p[key] = q.value ?? ""
+        }
+        let user = c.user?.removingPercentEncoding ?? c.user ?? ""
+        let password = c.password?.removingPercentEncoding ?? c.password
+        let secret: String
+        if proto == "hysteria2", let password {
+            secret = "\(user):\(password)"
+        } else {
+            secret = user
+        }
         let name = frag.removingPercentEncoding ?? frag
         return ProxyNode(name: name.isEmpty ? host : name, proto: proto, server: host,
                          port: c.port ?? 443, secret: secret, params: p, raw: s)
@@ -226,9 +238,13 @@ enum LinkParser {
 enum SingBoxConfig {
     static let controlPort = 49173
     static let maxProviderConfigSourceBytes = 16 * 1024 * 1024
+    static let nodeProbeURL = "https://www.cloudflare.com/cdn-cgi/trace"
 
     private static func tls(_ n: ProxyNode) -> [String: Any]? {
-        let sec = n.p("security") ?? ((n.proto == "trojan" || n.proto == "hysteria2") ? "tls" : "none")
+        let proto = n.proto.lowercased()
+        let sec = (proto == "hysteria2" || proto == "hy2")
+            ? "tls"
+            : (n.p("security") ?? (proto == "trojan" ? "tls" : "none"))
         guard sec == "tls" || sec == "reality" else { return nil }
         var t: [String: Any] = ["enabled": true]
         t["server_name"] = n.p("sni") ?? n.p("peer") ?? n.p("host") ?? n.server
@@ -345,7 +361,7 @@ enum SingBoxConfig {
         let manual: [String: Any] = ["type": "selector", "tag": "manual", "outbounds": nodeTags,
                                      "default": selectedTag, "interrupt_exist_connections": true]
         let automatic: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": nodeTags,
-                                        "url": "https://www.gstatic.com/generate_204", "interval": "10m",
+                                        "url": nodeProbeURL, "interval": "10m",
                                         "tolerance": 50, "interrupt_exist_connections": true]
         let proxy: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": ["manual", "auto"],
                                     "default": selectionMode.outboundTag, "interrupt_exist_connections": true]
