@@ -169,7 +169,7 @@ private enum WallpaperStore {
         do {
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: destination, options: .atomic)
-            let storedURL = destination
+            var storedURL = destination
             var resourceValues = URLResourceValues()
             resourceValues.isExcludedFromBackup = true
             try? storedURL.setResourceValues(resourceValues)
