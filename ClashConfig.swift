@@ -1,215 +1,212 @@
 import Foundation
 
-/// Exports the stored profiles as a portable Mihomo / Clash.Meta YAML configuration.
-enum ClashConfig {
-    static func exportableNodeCount(nodes: [ProxyNode]) -> Int {
-        nodes.filter(isSupported).count
+enum SingBoxConfig {
+    private static func tls(_ n: ProxyNode) -> [String: Any]? {
+        let sec = n.p("security") ?? ((n.proto == "trojan" || n.proto == "hysteria2") ? "tls" : "none")
+        guard sec == "tls" || sec == "reality" else { return nil }
+        var t: [String: Any] = ["enabled": true]
+        t["server_name"] = n.p("sni") ?? n.p("peer") ?? n.p("host") ?? n.server
+        if n.p("allowInsecure") == "1" || n.p("insecure") == "1" { t["insecure"] = true }
+        if let a = n.p("alpn") {
+            t["alpn"] = a.split(separator: ",").map { String($0) }
+        }
+        if sec == "reality" {
+            let reality: [String: Any] = ["enabled": true, "public_key": n.p("pbk") ?? "", "short_id": n.p("sid") ?? ""]
+            t["reality"] = reality
+            let utls: [String: Any] = ["enabled": true, "fingerprint": n.p("fp") ?? "chrome"]
+            t["utls"] = utls
+        } else if let fp = n.p("fp") {
+            let utls: [String: Any] = ["enabled": true, "fingerprint": fp]
+            t["utls"] = utls
+        }
+        return t
     }
 
-    static func build(nodes: [ProxyNode], selectedID: UUID?, selectionMode: ProxySelectionMode,
-                      bypassCN: Bool, routingRules: [ProxyRoutingRule]) -> String {
-        let supportedNodes = nodes.filter(isSupported)
-        guard !supportedNodes.isEmpty else { return "" }
-
-        var usedNames = Set<String>()
-        let names = supportedNodes.map { node -> String in
-            let base = node.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? node.server : node.name
-            if usedNames.insert(base).inserted { return base }
-            let unique = "\(base) (\(node.id.uuidString.prefix(4)))"
-            usedNames.insert(unique)
-            return unique
-        }
-        let selectedIndex = supportedNodes.firstIndex(where: { $0.id == selectedID }) ?? 0
-        let selectedName = names[selectedIndex]
-        let quotedNames = names.map(quote)
-        var lines = [
-            "# Clash.Meta / Mihomo profile",
-            "mixed-port: 7890",
-            "allow-lan: false",
-            "mode: rule",
-            "log-level: info",
-            "ipv6: false",
-            "proxies:"
-        ]
-
-        for (index, node) in supportedNodes.enumerated() {
-            appendProxy(node, name: names[index], to: &lines)
-        }
-
-        lines += [
-            "proxy-groups:",
-            "  - name: \(quote("手动选择"))",
-            "    type: select",
-            "    proxies:"
-        ]
-        for name in quotedNames { lines.append("      - \(name)") }
-        lines += [
-            "    default-selected: \(quote(selectedName))",
-            "  - name: \(quote("自动选择"))",
-            "    type: url-test",
-            "    proxies:"
-        ]
-        for name in quotedNames { lines.append("      - \(name)") }
-        lines += [
-            "    url: \(quote("https://www.gstatic.com/generate_204"))",
-            "    interval: 600",
-            "    tolerance: 50",
-            "    lazy: true",
-            "  - name: \(quote("PROXY"))",
-            "    type: select",
-            "    proxies:",
-            "      - \(quote(selectionMode == .automatic ? "自动选择" : "手动选择"))",
-            "      - \(quote(selectionMode == .automatic ? "手动选择" : "自动选择"))",
-            "rules:"
-        ]
-
-        for rule in routingRules where !rule.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let target = rule.target == .direct ? "DIRECT" : "PROXY"
-            switch rule.kind {
-            case .domainSuffix:
-                lines.append("  - \(quote("DOMAIN-SUFFIX,\(rule.value),\(target)"))")
-            case .ipCIDR:
-                let type = rule.value.contains(":") ? "IP-CIDR6" : "IP-CIDR"
-                lines.append("  - \(quote("\(type),\(rule.value),\(target),no-resolve"))")
-            }
-        }
-        if bypassCN {
-            for suffix in SingBoxConfig.cnSuffixes {
-                lines.append("  - \(quote("DOMAIN-SUFFIX,\(suffix),DIRECT"))")
-            }
-        }
-        lines.append("  - \(quote("MATCH,PROXY"))")
-        return lines.joined(separator: "\n") + "\n"
-    }
-
-    private static func isSupported(_ node: ProxyNode) -> Bool {
-        let proto = node.proto.lowercased()
-        let supportedProto = ["vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria2", "hy2"]
-            .contains(proto)
-        let network = node.p("type") ?? node.p("net") ?? "tcp"
-        guard supportedProto,
-              !node.server.isEmpty,
-              !node.secret.isEmpty,
-              (1...65535).contains(node.port),
-              ["", "tcp", "ws", "grpc"].contains(network.lowercased()) else { return false }
-        if proto == "vless", node.p("security") == "reality", node.p("pbk") == nil { return false }
-        return true
-    }
-
-    private static func appendProxy(_ node: ProxyNode, name: String, to lines: inout [String]) {
-        let proto = node.proto.lowercased()
-        let type = proto == "shadowsocks" ? "ss" : (proto == "hy2" ? "hysteria2" : proto)
-        lines += [
-            "  - name: \(quote(name))",
-            "    type: \(type)",
-            "    server: \(quote(node.server))",
-            "    port: \(node.port)",
-            "    udp: true"
-        ]
-
-        switch proto {
-        case "vless":
-            append("uuid", node.secret, to: &lines)
-            appendIfPresent("flow", node.p("flow"), to: &lines)
-            append("encryption", "none", to: &lines)
-            append("packet-encoding", "xudp", to: &lines)
-            appendTLS(node, to: &lines)
-            appendTransport(node, to: &lines)
-        case "vmess":
-            append("uuid", node.secret, to: &lines)
-            lines.append("    alterId: \(Int(node.p("aid") ?? "0") ?? 0)")
-            append("cipher", node.p("scy") ?? "auto", to: &lines)
-            append("packet-encoding", "xudp", to: &lines)
-            appendTLS(node, to: &lines)
-            appendTransport(node, to: &lines)
-        case "trojan":
-            lines.append("    tls: true")
-            append("password", node.secret, to: &lines)
-            appendIfPresent("sni", serverName(node), to: &lines)
-            appendSkipCertVerify(node, to: &lines)
-            appendALPN(node, to: &lines)
-            appendTransport(node, to: &lines)
-        case "ss", "shadowsocks":
-            append("cipher", node.p("method") ?? "aes-128-gcm", to: &lines)
-            append("password", node.secret, to: &lines)
-        case "hysteria2", "hy2":
-            append("password", node.secret, to: &lines)
-            appendIfPresent("sni", serverName(node), to: &lines)
-            appendSkipCertVerify(node, to: &lines)
-            appendIfPresent("obfs", node.p("obfs"), to: &lines)
-            appendIfPresent("obfs-password", node.p("obfs-password"), to: &lines)
-            appendALPN(node, to: &lines)
+    private static func transport(_ n: ProxyNode) -> [String: Any]? {
+        let type = n.p("type") ?? n.p("net") ?? "tcp"
+        switch type {
+        case "ws":
+            var t: [String: Any] = ["type": "ws", "path": n.p("path") ?? "/"]
+            if let h = n.p("host") { t["headers"] = ["Host": h] }
+            return t
+        case "grpc":
+            return ["type": "grpc", "service_name": n.p("serviceName") ?? n.p("path") ?? ""]
+        case "httpupgrade":
+            var t: [String: Any] = ["type": "httpupgrade", "path": n.p("path") ?? "/"]
+            if let h = n.p("host") { t["host"] = h }
+            return t
         default:
-            break
+            return nil
         }
     }
 
-    private static func appendTLS(_ node: ProxyNode, to lines: inout [String]) {
-        let security = node.p("security") ?? "none"
-        let enabled = security == "tls" || security == "reality"
-        lines.append("    tls: \(enabled)")
-        if enabled { appendIfPresent("servername", serverName(node), to: &lines) }
-        appendIfPresent("client-fingerprint", node.p("fp"), to: &lines)
-        if security == "reality" {
-            lines.append("    reality-opts:")
-            append("public-key", node.p("pbk") ?? "", indent: 6, to: &lines)
-            appendIfPresent("short-id", node.p("sid"), indent: 6, to: &lines)
-        }
-        appendSkipCertVerify(node, to: &lines)
-        appendALPN(node, to: &lines)
-    }
-
-    private static func appendTransport(_ node: ProxyNode, to lines: inout [String]) {
-        let network = node.p("type") ?? node.p("net") ?? "tcp"
-        guard ["ws", "grpc"].contains(network) else { return }
-        lines.append("    network: \(network)")
-        if network == "ws" {
-            lines.append("    ws-opts:")
-            append("path", node.p("path") ?? "/", indent: 6, to: &lines)
-            if let host = node.p("host") {
-                lines.append("      headers:")
-                append("Host", host, indent: 8, to: &lines)
+    static func outbound(_ n: ProxyNode, tag: String) -> [String: Any] {
+        var o: [String: Any] = ["tag": tag, "server": n.server, "server_port": n.port]
+        switch n.proto {
+        case "vless":
+            o["type"] = "vless"
+            o["uuid"] = n.secret
+            if let f = n.p("flow") { o["flow"] = f }
+            o["packet_encoding"] = "xudp"
+        case "vmess":
+            o["type"] = "vmess"
+            o["uuid"] = n.secret
+            o["security"] = n.p("scy") ?? "auto"
+            o["alter_id"] = Int(n.p("aid") ?? "0") ?? 0
+        case "trojan":
+            o["type"] = "trojan"
+            o["password"] = n.secret
+        case "ss":
+            o["type"] = "shadowsocks"
+            o["method"] = n.p("method") ?? "aes-128-gcm"
+            o["password"] = n.secret
+            if let pl = n.p("plugin") {
+                o["plugin"] = pl
+                o["plugin_opts"] = n.params["plugin_opts"] ?? ""
             }
-        } else if network == "grpc" {
-            lines.append("    grpc-opts:")
-            append("grpc-service-name", node.p("serviceName") ?? node.p("path") ?? "", indent: 6, to: &lines)
+        case "hysteria2":
+            o["type"] = "hysteria2"
+            o["password"] = n.secret
+            if let ob = n.p("obfs") {
+                o["obfs"] = ["type": ob, "password": n.p("obfs-password") ?? ""]
+            }
+        default:
+            o["type"] = "direct"
         }
+        if n.proto != "ss", let t = tls(n) { o["tls"] = t }
+        if ["vless", "vmess", "trojan"].contains(n.proto), let tr = transport(n) { o["transport"] = tr }
+        return o
     }
 
-    private static func appendALPN(_ node: ProxyNode, to lines: inout [String]) {
-        guard let value = node.p("alpn") else { return }
-        let values = value.split(separator: ",").map { String($0) }
-        guard !values.isEmpty else { return }
-        lines.append("    alpn:")
-        for item in values { lines.append("      - \(quote(item))") }
+    static let cnSuffixes = ["cn", "baidu.com", "qq.com", "weixin.qq.com", "taobao.com", "tmall.com", "alipay.com",
+                             "alibaba.com", "aliyun.com", "jd.com", "163.com", "126.net", "bilibili.com",
+                             "weibo.com", "zhihu.com", "douyin.com", "bytedance.com", "xiaohongshu.com",
+                             "meituan.com", "mi.com", "xiaomi.com", "huawei.com", "sina.com.cn"]
+
+    static let nodeProbeURL = "https://cp.cloudflare.com/generate_204"
+    static let controlPort = 9090
+    static let controlURL = URL(string: "http://127.0.0.1:9090")!
+
+    static func nodeTag(_ n: ProxyNode) -> String {
+        "node-" + n.id.uuidString.lowercased()
     }
 
-    private static func serverName(_ node: ProxyNode) -> String? {
-        node.p("sni") ?? node.p("peer") ?? node.p("host") ?? node.server
+    static func isSupported(_ n: ProxyNode) -> Bool {
+        ["vless", "vmess", "trojan", "ss", "hysteria2"].contains(n.proto)
+            && !n.server.isEmpty && !n.secret.isEmpty && (1...65535).contains(n.port)
     }
 
-    private static func insecure(_ node: ProxyNode) -> Bool {
-        node.p("allowInsecure") == "1" || node.p("insecure") == "1"
-    }
-
-    private static func appendIfPresent(_ key: String, _ value: String?, indent: Int = 4, to lines: inout [String]) {
-        guard let value, !value.isEmpty else { return }
-        append(key, value, indent: indent, to: &lines)
-    }
-
-    private static func appendSkipCertVerify(_ node: ProxyNode, to lines: inout [String]) {
-        if insecure(node) { lines.append("    skip-cert-verify: true") }
-    }
-
-    private static func append(_ key: String, _ value: String, indent: Int = 4, to lines: inout [String]) {
-        let spaces = String(repeating: " ", count: indent)
-        lines.append("\(spaces)\(key): \(quote(value))")
-    }
-
-    private static func quote(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]) else {
-            return "\"\""
+    private static func literalIPv4(_ host: String) -> String? {
+        let parts = host.split(separator: ".")
+        guard parts.count == 4 else { return nil }
+        for p in parts {
+            guard let n = Int(p), (0...255).contains(n) else { return nil }
         }
+        return host
+    }
+
+    static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
+                      bypassCN: Bool, rules: [ProxyRoutingRule]) -> String {
+        let usable = nodes.filter(isSupported)
+        let tags = usable.map { nodeTag($0) }
+        let selectedTag = usable.first(where: { $0.id == selectedID }).map { nodeTag($0) } ?? tags.first ?? "direct"
+
+        let direct: [String: Any] = ["type": "direct", "tag": "direct"]
+        var outbounds: [[String: Any]] = usable.map { outbound($0, tag: nodeTag($0)) }
+        outbounds.append(direct)
+        if tags.isEmpty {
+            outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
+        } else {
+            let auto: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": tags,
+                                       "url": nodeProbeURL, "interval": "5m"]
+            let members = mode == .automatic ? ["auto"] + tags : [selectedTag] + tags.filter { $0 != selectedTag }
+            let selector: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": members,
+                                           "default": mode == .automatic ? "auto" : selectedTag]
+            outbounds.append(auto)
+            outbounds.append(selector)
+        }
+
+        var nodeIPs: [String] = []
+        for n in usable {
+            if let ip = literalIPv4(n.server) {
+                nodeIPs.append("\(ip)/32")
+            }
+        }
+
+        // ★ 修复 1：必须先 sniff，否则 protocol:"dns" 永不命中，hijack-dns 失效
+        var routeRules: [[String: Any]] = [
+            ["action": "sniff"],
+            ["protocol": "dns", "action": "hijack-dns"],
+            ["ip_is_private": true, "outbound": "direct"]
+        ]
+        
+        if !nodeIPs.isEmpty {
+            routeRules.append(["ip_cidr": nodeIPs, "outbound": "direct"])
+        }
+
+        var dnsRules: [[String: Any]] = []
+        for r in rules {
+            let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { continue }
+            let out = r.target == .direct ? "direct" : "proxy"
+            var rule: [String: Any] = ["outbound": out]
+            switch r.kind {
+            case .domainSuffix:
+                rule["domain_suffix"] = [v]
+                dnsRules.append(["domain_suffix": [v], "server": r.target == .direct ? "dns-local" : "dns-remote"])
+            case .ipCIDR:
+                rule["ip_cidr"] = [v]
+            }
+            routeRules.append(rule)
+        }
+        
+        if bypassCN {
+            routeRules.append(["domain_suffix": cnSuffixes, "outbound": "direct"])
+            dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
+        }
+
+        let dnsServers: [[String: Any]] = [
+            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
+            ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
+            ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
+        ]
+        // ★ 修复 2：默认走代理 DNS（干净、不会被污染），国内域名由 cnSuffixes 规则分流到本地 DNS
+        let dns: [String: Any] = [
+            "servers": dnsServers,
+            "rules": dnsRules,
+            "final": "dns-remote",
+            "strategy": "prefer_ipv4",
+            "independent_cache": true
+        ]
+
+        // ★ 修复 3：把 DNS 服务器 IP 也排除出 TUN 路由，避免 direct 发出的 DNS 包又被 TUN 抓回
+        var tunExcludes: [String] = nodeIPs
+        tunExcludes.append(contentsOf: ["223.5.5.5/32", "8.8.8.8/32"])
+        var tun: [String: Any] = [
+            "type": "tun", "tag": "tun-in",
+            "address": ["172.19.0.1/30"],
+            "mtu": 1500,
+            "auto_route": true,
+            "strict_route": false,
+            "stack": "system"
+        ]
+        if !tunExcludes.isEmpty {
+            tun["inet4_route_exclude_address"] = tunExcludes
+        }
+        
+        let route: [String: Any] = [
+            "rules": routeRules,
+            "final": "proxy",
+            "auto_detect_interface": false
+        ]
+        let log: [String: Any] = ["level": "info", "timestamp": true]
+        let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
+        let experimental: [String: Any] = ["clash_api": clash]
+        let cfg: [String: Any] = [
+            "log": log, "dns": dns, "inbounds": [tun], "outbounds": outbounds,
+            "route": route, "experimental": experimental
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 }
