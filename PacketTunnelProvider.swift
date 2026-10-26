@@ -129,14 +129,12 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        // 让系统解析器使用 sing-box 提供的 DNS 地址，由 TUN 内的 DNS 劫持规则处理，
-        // 不把系统查询强制旁路到公共解析器（这在受限网络上可能无法直连）。
+        // Libbox 1.11 exposes the TUN DNS-hijack address as a single StringBox.
+        // Send system DNS there so sing-box can apply its DNS rules.
         var dnsServers: [String] = []
-        if let dnsMode = options.getDNSMode(), dnsMode.value != LibboxDNSModeDisabled {
-            let dnsServerIterator = try options.getDNSServerAddress()
-            while dnsServerIterator.hasNext() {
-                dnsServers.append(dnsServerIterator.next())
-            }
+        if let dnsServer = try? options.getDNSServerAddress()?.value,
+           !dnsServer.isEmpty {
+            dnsServers = [dnsServer]
         }
         if !dnsServers.isEmpty {
             let dnsSettings = NEDNSSettings(servers: dnsServers)
@@ -145,7 +143,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
             settings.dnsSettings = dnsSettings
             TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServers.joined(separator: ","))")
         } else {
-            TunnelLog.shared.add("[ext] Libbox DNS disabled or no DNS servers")
+            TunnelLog.shared.add("[ext] Libbox DNS address unavailable")
         }
 
         var v4Addr: [String] = []
