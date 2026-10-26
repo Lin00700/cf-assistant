@@ -98,6 +98,16 @@ enum SingBoxConfig {
             && !n.server.isEmpty && !n.secret.isEmpty && (1...65535).contains(n.port)
     }
 
+    /// 纯 IPv4 字面量才返回，用于把节点 IP 强制直连，避免进隧道绕圈
+    private static func literalIPv4(_ host: String) -> String? {
+        let parts = host.split(separator: ".")
+        guard parts.count == 4 else { return nil }
+        for p in parts {
+            guard let n = Int(p), (0...255).contains(n) else { return nil }
+        }
+        return host
+    }
+
     static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
                       bypassCN: Bool, rules: [ProxyRoutingRule]) -> String {
         let usable = nodes.filter(isSupported)
@@ -119,10 +129,21 @@ enum SingBoxConfig {
             outbounds.append(selector)
         }
 
+        // 节点 IP 必须直连，否则连 SS 服务器本身也会进隧道黑洞
         var routeRules: [[String: Any]] = [
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
+        var nodeIPs: [String] = []
+        for n in usable {
+            if let ip = literalIPv4(n.server) {
+                nodeIPs.append("\(ip)/32")
+            }
+        }
+        if !nodeIPs.isEmpty {
+            routeRules.append(["ip_cidr": nodeIPs, "outbound": "direct"])
+        }
+
         var dnsRules: [[String: Any]] = []
 
         for r in rules {
@@ -164,10 +185,11 @@ enum SingBoxConfig {
             "strict_route": false,
             "stack": "gvisor"
         ]
+        // iOS NE 上由平台监听上报默认网卡；auto_detect 在扩展里容易把流量黑洞
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
-            "auto_detect_interface": true
+            "auto_detect_interface": false
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
