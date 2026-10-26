@@ -41,7 +41,14 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try? fm.createDirectory(at: temp, withIntermediateDirectories: true)
 
         TunnelLog.shared.add("[ext] startTunnel, 配置 \(config.count) 字节")
-        LibboxSetup(base.path, work.path, temp.path, false)
+        let setup = LibboxSetupOptions()
+        setup.basePath = base.path
+        setup.workingPath = work.path
+        setup.tempPath = temp.path
+        setup.isTVOS = false
+        var setupErr: NSError?
+        LibboxSetup(setup, &setupErr)
+        if let setupErr { throw setupErr }
 
         let platform = TunnelPlatform(self)
         self.platform = platform
@@ -195,4 +202,5 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     func includeAllNetworks() -> Bool { false }
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
+    func send(_ notification: LibboxNotification?) throws {}
 }
