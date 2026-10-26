@@ -166,7 +166,7 @@ struct ProxyHomeView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            store.select(n)
+            store.selectedID = n.id
             Task { await vpn.restartIfActive(store: store) }
         }
         .swipeActions(edge: .leading) {
@@ -205,8 +205,8 @@ struct ProxyHomeView: View {
             let count = ClashConfig.exportableNodeCount(nodes: store.nodes)
             Button("复制 Clash 配置（\(count) 节点）") {
                 let text = ClashConfig.build(nodes: store.nodes, selectedID: store.selectedID,
-                                             mode: store.selectionMode, bypassCN: store.bypassCN,
-                                             rules: store.routingRules)
+                                             selectionMode: store.selectionMode, bypassCN: store.bypassCN,
+                                             routingRules: store.routingRules)
                 UIPasteboard.general.string = text
                 toast = "已复制 Clash 配置"
             }
@@ -365,14 +365,11 @@ struct NodeDeployView: View {
         error = nil
         result = nil
         defer { busy = false }
-        do {
-            let host = address.trimmingCharacters(in: .whitespacesAndNewlines)
-            let node = NodeWorker.node(name: name, host: host.isEmpty ? "\(name).workers.dev" : host, address: host.isEmpty ? "\(name).workers.dev" : host, uuid: uuid)
-            store.add(node, select: true)
-            result = "已添加节点（请使用完整部署流程若需真正上传 Worker 脚本）"
-        } catch {
-            self.error = error.localizedDescription
-        }
+        let host = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nodeHost = host.isEmpty ? "\(name).workers.dev" : host
+        let node = NodeWorker.node(name: name, host: nodeHost, address: nodeHost, uuid: uuid)
+        store.add(node, select: true)
+        result = "已添加节点 \(nodeHost)"
     }
 }
 
