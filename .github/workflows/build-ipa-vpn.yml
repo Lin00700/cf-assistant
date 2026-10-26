@@ -19,12 +19,6 @@ jobs:
           echo "sing-box tag: $TAG"
           git clone --depth 1 --branch "$TAG" https://github.com/SagerNet/sing-box.git "$RUNNER_TEMP/sing-box"
           cd "$RUNNER_TEMP/sing-box"
-          GM=$(grep 'sagernet/gomobile' go.mod | head -1 | awk '{print $2}')
-          GM=${GM:-v0.1.4}
-          echo "gomobile: $GM"
-          go install -v github.com/sagernet/gomobile/cmd/gomobile@$GM
-          go install -v github.com/sagernet/gomobile/cmd/gobind@$GM
-          export PATH="$PATH:$(go env GOPATH)/bin"
           (go run ./cmd/internal/build_libbox -target apple -platform ios || go run ./cmd/internal/build_libbox -target apple)
           ls -d Libbox.xcframework
           mv Libbox.xcframework "$GITHUB_WORKSPACE/"
@@ -60,6 +54,3 @@ jobs:
         with:
           name: CFAssistant-VPN-IPA
           path: CFAssistant-VPN.ipa
-```
-
-贴完后应能看到 `go install ... gomobile`。提交后再跑构建。
