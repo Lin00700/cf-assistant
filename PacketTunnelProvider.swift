@@ -274,7 +274,13 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     }
 
     private static func pickInterface(from path: Network.NWPath) -> Network.NWInterface? {
-        let ifaces = path.availableInterfaces
+        // 排除 utun/ipsec 等隧道网卡，否则默认出口会指回自己形成黑洞
+        let ifaces = path.availableInterfaces.filter { iface in
+            let n = iface.name.lowercased()
+            if n.hasPrefix("utun") || n.hasPrefix("ipsec") || n.hasPrefix("ppp") { return false }
+            if iface.type == Network.NWInterface.InterfaceType.loopback { return false }
+            return true
+        }
         if ifaces.isEmpty { return nil }
 
         func rank(_ iface: Network.NWInterface) -> Int {
@@ -282,7 +288,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
             case Network.NWInterface.InterfaceType.wifi: return 0
             case Network.NWInterface.InterfaceType.cellular: return 1
             case Network.NWInterface.InterfaceType.wiredEthernet: return 2
-            case Network.NWInterface.InterfaceType.loopback: return 9
             default: return 5
             }
         }
