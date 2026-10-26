@@ -132,8 +132,60 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         if v4Addr.isEmpty { v4Addr = ["172.19.0.1"]; v4Mask = ["255.255.255.252"] }
         let v4 = NEIPv4Settings(addresses: v4Addr, subnetMasks: v4Mask)
-        v4.includedRoutes = [NEIPv4Route.default()]
+        var v4Routes: [NEIPv4Route] = []
+        if let it = options.getInet4RouteAddress() {
+            while it.hasNext() {
+                if let prefix = it.next() {
+                    v4Routes.append(NEIPv4Route(destinationAddress: prefix.address(), subnetMask: prefix.mask()))
+                }
+            }
+        }
+        if v4Routes.isEmpty { v4Routes = [NEIPv4Route.default()] }
+        v4.includedRoutes = v4Routes
+        var v4ExcludedRoutes: [NEIPv4Route] = []
+        if let it = options.getInet4RouteExcludeAddress() {
+            while it.hasNext() {
+                if let prefix = it.next() {
+                    v4ExcludedRoutes.append(NEIPv4Route(destinationAddress: prefix.address(), subnetMask: prefix.mask()))
+                }
+            }
+        }
+        v4.excludedRoutes = v4ExcludedRoutes
         settings.ipv4Settings = v4
+
+        var v6Addr: [String] = []
+        var v6Prefixes: [NSNumber] = []
+        if let it = options.getInet6Address() {
+            while it.hasNext() {
+                if let prefix = it.next() {
+                    v6Addr.append(prefix.address())
+                    v6Prefixes.append(NSNumber(value: prefix.prefix()))
+                }
+            }
+        }
+        if !v6Addr.isEmpty {
+            let v6 = NEIPv6Settings(addresses: v6Addr, networkPrefixLengths: v6Prefixes)
+            var v6Routes: [NEIPv6Route] = []
+            if let it = options.getInet6RouteAddress() {
+                while it.hasNext() {
+                    if let prefix = it.next() {
+                        v6Routes.append(NEIPv6Route(destinationAddress: prefix.address(), networkPrefixLength: NSNumber(value: prefix.prefix())))
+                    }
+                }
+            }
+            if v6Routes.isEmpty { v6Routes = [NEIPv6Route.default()] }
+            v6.includedRoutes = v6Routes
+            var v6ExcludedRoutes: [NEIPv6Route] = []
+            if let it = options.getInet6RouteExcludeAddress() {
+                while it.hasNext() {
+                    if let prefix = it.next() {
+                        v6ExcludedRoutes.append(NEIPv6Route(destinationAddress: prefix.address(), networkPrefixLength: NSNumber(value: prefix.prefix())))
+                    }
+                }
+            }
+            v6.excludedRoutes = v6ExcludedRoutes
+            settings.ipv6Settings = v6
+        }
 
         let sem = DispatchSemaphore(value: 0)
         var setErr: Error?
@@ -158,7 +210,9 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
 
     // MARK: 平台能力
 
-    func usePlatformAutoDetectControl() -> Bool { true }
+    // Let sing-box bind sockets via the interface monitor; claiming platform
+    // control while autoDetectControl is a no-op can leave node traffic unbound.
+    func usePlatformAutoDetectControl() -> Bool { false }
     func autoDetectControl(_ fd: Int32) throws {}
 
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32,
@@ -184,16 +238,22 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
         let m = NWPathMonitor()
         monitor = m
+        let initialPathUpdate = DispatchSemaphore(value: 0)
         m.pathUpdateHandler = { path in
+            defer { initialPathUpdate.signal() }
             if path.status == .unsatisfied {
                 listener?.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false)
                 return
             }
-            guard let iface = path.availableInterfaces.first else { return }
+            guard let iface = path.availableInterfaces.first else {
+                listener?.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false)
+                return
+            }
             listener?.updateDefaultInterface(iface.name, interfaceIndex: Int32(iface.index),
                                              isExpensive: path.isExpensive, isConstrained: path.isConstrained)
         }
         m.start(queue: DispatchQueue(label: "cf.tunnel.monitor"))
+        initialPathUpdate.wait()
     }
 
     func closeDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {

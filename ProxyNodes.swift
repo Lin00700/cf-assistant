@@ -488,8 +488,8 @@ enum SingBoxConfig {
             ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"],
             ["tag": "dns-local", "address": "223.5.5.5", "detour": "direct"]
         ]
-        let dns: [String: Any] = ["servers": dnsServers, "rules": dnsRules, "final": "dns-remote", "strategy": "ipv4_only"]
-        let tun: [String: Any] = ["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "mtu": 9000,
+        let dns: [String: Any] = ["servers": dnsServers, "rules": dnsRules, "final": "dns-remote", "strategy": "prefer_ipv4"]
+        let tun: [String: Any] = ["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"], "mtu": 9000,
                                   "auto_route": true, "strict_route": false, "stack": "gvisor"]
         let direct: [String: Any] = ["type": "direct", "tag": "direct"]
         let manual: [String: Any] = ["type": "selector", "tag": "manual", "outbounds": nodeTags,
