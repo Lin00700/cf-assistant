@@ -1,4 +1,5 @@
 import Foundation
+import Compression
 
 // MARK: - 节点模型
 
@@ -224,6 +225,7 @@ enum LinkParser {
 
 enum SingBoxConfig {
     static let controlPort = 49173
+    static let maxProviderConfigSourceBytes = 16 * 1024 * 1024
 
     private static func tls(_ n: ProxyNode) -> [String: Any]? {
         let sec = n.p("security") ?? ((n.proto == "trojan" || n.proto == "hysteria2") ? "tls" : "none")
@@ -358,6 +360,38 @@ enum SingBoxConfig {
         ]
         let data = (try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Provider configuration is stored in iOS preferences, which have a 512 KiB limit.
+    /// Keep the full node list while storing a compact, length-prefixed zlib payload there.
+    static func compressedProviderConfig(_ config: String) -> Data? {
+        let source = Data(config.utf8)
+        guard !source.isEmpty, source.count <= maxProviderConfigSourceBytes else { return nil }
+
+        var compressed = Data(count: source.count + source.count / 100 + 1024)
+        let scratchSize = compression_encode_scratch_buffer_size(COMPRESSION_ZLIB)
+        let scratch = UnsafeMutableRawPointer.allocate(
+            byteCount: max(1, scratchSize), alignment: MemoryLayout<UInt8>.alignment
+        )
+        defer { scratch.deallocate() }
+
+        let compressedSize = source.withUnsafeBytes { sourceBuffer -> Int in
+            guard let sourceBytes = sourceBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return compressed.withUnsafeMutableBytes { destinationBuffer -> Int in
+                guard let destinationBytes = destinationBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_encode_buffer(
+                    destinationBytes, destinationBuffer.count,
+                    sourceBytes, sourceBuffer.count, scratch, COMPRESSION_ZLIB
+                )
+            }
+        }
+        guard compressedSize > 0 else { return nil }
+
+        var payload = Data()
+        var uncompressedSize = UInt64(source.count).bigEndian
+        withUnsafeBytes(of: &uncompressedSize) { payload.append(contentsOf: $0) }
+        payload.append(compressed.prefix(compressedSize))
+        return payload
     }
 }
 

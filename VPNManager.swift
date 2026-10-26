@@ -71,17 +71,30 @@ final class VPNManager: ObservableObject {
                 }
                 let store = ProxyStore.shared
                 let nodes = store.nodes.contains(where: { $0.id == node.id }) ? store.nodes : [node]
-                let m = manager ?? NETunnelProviderManager()
-                let proto = NETunnelProviderProtocol()
-                proto.providerBundleIdentifier = extID
-                proto.serverAddress = node.server
-                proto.providerConfiguration = ["config": SingBoxConfig.build(
+                let config = SingBoxConfig.build(
                     nodes: nodes,
                     selectedID: node.id,
                     selectionMode: store.selectionMode,
                     bypassCN: bypassCN,
                     routingRules: store.routingRules
-                )]
+                )
+                guard config.utf8.count <= SingBoxConfig.maxProviderConfigSourceBytes else {
+                    error = "VPN 配置超过系统可处理上限；现有节点未被更改或删除"
+                    return
+                }
+                guard let compressedConfig = SingBoxConfig.compressedProviderConfig(config) else {
+                    error = "VPN 配置压缩失败；现有节点未被更改或删除，请重试"
+                    return
+                }
+                guard compressedConfig.count <= 480 * 1024 else {
+                    error = "压缩后的 VPN 配置仍超过系统上限；现有节点未被更改或删除"
+                    return
+                }
+                let m = manager ?? NETunnelProviderManager()
+                let proto = NETunnelProviderProtocol()
+                proto.providerBundleIdentifier = extID
+                proto.serverAddress = node.server
+                proto.providerConfiguration = ["configCompressed": compressedConfig]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
                 m.isEnabled = true

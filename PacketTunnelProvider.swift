@@ -2,6 +2,7 @@ import Foundation
 import Network
 import NetworkExtension
 import UserNotifications
+import Compression
 import Libbox
 
 // VPN 扩展：用 sing-box 的 Libbox 在 NEPacketTunnelProvider 里跑全局代理。
@@ -12,8 +13,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var platform: TunnelPlatform?
 
     override func startTunnel(options: [String: NSObject]?) async throws {
-        guard let proto = protocolConfiguration as? NETunnelProviderProtocol,
-              let config = proto.providerConfiguration?["config"] as? String, !config.isEmpty else {
+        guard let proto = protocolConfiguration as? NETunnelProviderProtocol else {
+            throw NSError(domain: "CFTunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "缺少 sing-box 配置"])
+        }
+        let providerConfiguration = proto.providerConfiguration ?? [:]
+        let config: String
+        if let compressedConfig = providerConfiguration["configCompressed"] as? Data {
+            guard let decodedConfig = Self.decompressConfig(compressedConfig) else {
+                throw NSError(domain: "CFTunnel", code: 8, userInfo: [NSLocalizedDescriptionKey: "VPN 配置解压失败"])
+            }
+            config = decodedConfig
+        } else if let legacyConfig = providerConfiguration["config"] as? String, !legacyConfig.isEmpty {
+            config = legacyConfig
+        } else {
             throw NSError(domain: "CFTunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "缺少 sing-box 配置"])
         }
 
@@ -43,6 +55,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         try svc.start()
         service = svc
+    }
+
+    private static func decompressConfig(_ payload: Data) -> String? {
+        let headerSize = MemoryLayout<UInt64>.size
+        guard payload.count > headerSize else { return nil }
+        let uncompressedSize = payload.prefix(headerSize).reduce(UInt64(0)) {
+            ($0 << 8) | UInt64($1)
+        }
+        guard uncompressedSize > 0, uncompressedSize <= 16 * 1024 * 1024 else { return nil }
+
+        let compressed = Data(payload.dropFirst(headerSize))
+        var output = Data(count: Int(uncompressedSize))
+        let scratchSize = compression_decode_scratch_buffer_size(COMPRESSION_ZLIB)
+        let scratch = UnsafeMutableRawPointer.allocate(
+            byteCount: max(1, scratchSize), alignment: MemoryLayout<UInt8>.alignment
+        )
+        defer { scratch.deallocate() }
+
+        let decodedSize = compressed.withUnsafeBytes { sourceBuffer -> Int in
+            guard let sourceBytes = sourceBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+            return output.withUnsafeMutableBytes { destinationBuffer -> Int in
+                guard let destinationBytes = destinationBuffer.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(
+                    destinationBytes, destinationBuffer.count,
+                    sourceBytes, sourceBuffer.count, scratch, COMPRESSION_ZLIB
+                )
+            }
+        }
+        guard decodedSize == Int(uncompressedSize) else { return nil }
+        return String(data: output, encoding: .utf8)
     }
 
     override func stopTunnel(with reason: NEProviderStopReason) async {
