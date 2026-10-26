@@ -11,7 +11,7 @@
 - 存储：KV（按前缀搜索、批量导入）、D1（执行 SQL）、R2
 - 设置：API Token 管理（查看、创建、重新生成、删除）
 - Pages 项目页（仿控制台）：部署（详情、构建日志终端、浏览器打开）/ 指标 / 自定义域名 / 设置（变量和机密、KV·D1·R2 绑定、构建与兼容性信息）
-- VPN 与代理节点：V2Ray（VLESS / VMess）、Shadowsocks、Trojan、Hysteria2 分类；手动节点与自动选优组；通过代理链路进行 HTTPS 延迟测试；域名后缀 / IP-CIDR 直连或代理分流；订阅刷新和删除；可复制或分享 Clash Meta / Mihomo YAML 配置文件，或将单节点链接交给 Shadowrocket 导入
+- VPN 与代理节点：V2Ray（VLESS / VMess）、Shadowsocks、Trojan、Hysteria2 分类；手动节点与自动选优组；通过代理链路进行 HTTPS 延迟测试；连接诊断（DNS A/AAAA、IPv4/IPv6 HTTPS、HTTP；本地保留最近 10 次记录并可分享报告）；域名后缀 / IP-CIDR 直连或代理分流；订阅刷新和删除；可复制或分享 Clash Meta / Mihomo YAML 配置文件，或将单节点链接交给 Shadowrocket 导入
 - 优选 IP（移植自 BestCF 本地优选脚本，无需登录即可用）：多源抓取（域名 / IP / ip:port / CIDR / JSON / 粘贴文本）→ 去重 → 并发快测（TCP 延迟、TLS、/cdn-cgi/trace 取 Colo、纯度）→ 过滤（纯度 / 国家 / Colo）→ 复测（丢包 / 抖动）→ 下载测速 → 综合排序 → 导出 TXT / CSV / JSON → 一键写入 Cloudflare DNS，或写入 Worker / Pages 变量
 - 开发者：Tunnels（连接器与连接详情、清理失效连接、公共主机名增删并自动建 CNAME、运行令牌与安装命令）、优选 IP
 - 多账户切换

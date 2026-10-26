@@ -302,6 +302,22 @@ struct ProxyHomeView: View {
                 Toggle("大陆常见域名直连", isOn: $store.bypassCN)
             }
 
+            Section {
+                NavigationLink {
+                    ConnectivityDiagnosticsView()
+                } label: {
+                    HStack {
+                        Label("连接诊断", systemImage: "stethoscope")
+                        Spacer()
+                        Text(vpn.isConnected ? "VPN 已连接" : "需先连接 VPN")
+                            .font(.caption)
+                            .foregroundColor(vpn.isConnected ? .green : .secondary)
+                    }
+                }
+            } footer: {
+                Text("测试 DNS、IPv4 / IPv6 和 HTTP，并保存可分享的诊断记录。")
+            }
+
             ProxyNodeListSection(
                 nodes: store.nodes,
                 categoryNames: categoryNames,
