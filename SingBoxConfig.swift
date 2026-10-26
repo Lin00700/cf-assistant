@@ -144,17 +144,17 @@ enum SingBoxConfig {
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
 
-        // DNS 先直连；final 不依赖代理
         let dnsServers: [[String: Any]] = [
             ["tag": "dns-local", "address": "udp://223.5.5.5", "detour": "direct"],
             ["tag": "dns-backup", "address": "udp://8.8.8.8", "detour": "direct"],
             ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"]
         ]
+        // prefer_ipv4：和常见客户端一样，优先 IPv4；没有 IPv4 再试 IPv6，避免无 v6 时整段挂死
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
             "final": "dns-local",
-            "strategy": "ipv4_only",
+            "strategy": "prefer_ipv4",
             "independent_cache": true
         ]
         let tun: [String: Any] = [
