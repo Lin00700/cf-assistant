@@ -132,8 +132,8 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         // Libbox 1.11 exposes the TUN DNS-hijack address as a single StringBox.
         // Send system DNS there so sing-box can apply its DNS rules.
         var dnsServers: [String] = []
-        if let dnsServer = try? options.getDNSServerAddress()?.value,
-           !dnsServer.isEmpty {
+        let dnsServer = options.getDNSServerAddress().value
+        if !dnsServer.isEmpty {
             dnsServers = [dnsServer]
         }
         if !dnsServers.isEmpty {
