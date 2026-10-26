@@ -120,7 +120,6 @@ enum SingBoxConfig {
         }
 
         var routeRules: [[String: Any]] = [
-            ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
@@ -145,8 +144,7 @@ enum SingBoxConfig {
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
 
-        // DNS 必须先能在「直连」上解析，否则 proxy 出站（域名节点）和远程 DNS 都会卡死。
-        // final 用 dns-local：不依赖代理；dns-remote 仅给需要走代理解析的域名用。
+        // DNS 先直连；final 不依赖代理
         let dnsServers: [[String: Any]] = [
             ["tag": "dns-local", "address": "udp://223.5.5.5", "detour": "direct"],
             ["tag": "dns-backup", "address": "udp://8.8.8.8", "detour": "direct"],
@@ -165,13 +163,13 @@ enum SingBoxConfig {
             "mtu": 1500,
             "auto_route": true,
             "strict_route": false,
-            "stack": "system"
+            "stack": "gvisor"
         ]
-        // iOS Network Extension 里由平台接口上报默认网卡；关掉 auto_detect 避免和平台监听抢
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
-            "auto_detect_interface": false
+            "auto_detect_interface": false,
+            "default_domain_resolver": "dns-local"
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
