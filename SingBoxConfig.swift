@@ -172,14 +172,13 @@ enum SingBoxConfig {
             "strategy": "prefer_ipv4",
             "independent_cache": true
         ]
-        // 官方 Apple 客户端用 inet4_route_exclude_address 把节点 IP 踢出隧道
         var tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],
             "mtu": 1500,
             "auto_route": true,
             "strict_route": false,
-            "stack": "gvisor"
+            "stack": "system"
         ]
         if !nodeIPs.isEmpty {
             tun["inet4_route_exclude_address"] = nodeIPs
