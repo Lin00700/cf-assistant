@@ -3,8 +3,6 @@ import Network
 import NetworkExtension
 import Libbox
 
-// 对齐 SagerNet/sing-box-for-apple 的 ExtensionPlatformInterface.openTun 思路
-
 final class TunnelLog {
     static let shared = TunnelLog()
     private var lines: [String] = []
@@ -123,8 +121,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         monitor = nil
     }
 
-    // MARK: - openTun（对齐官方：DNS/路由都来自 Libbox options）
-
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws {
         guard let options, let ret0_ else {
             throw NSError(domain: "CFTunnel", code: 3, userInfo: [NSLocalizedDescriptionKey: "TUN 参数为空"])
@@ -133,29 +129,13 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        // DNS：用 Libbox 给出的隧道 DNS（如 172.19.0.2），由 sing-box 处理解析
-        var dnsServers: [String] = []
-        do {
-            let it = try options.getDNSServerAddress()
-            // 1.11 可能是单个字符串包装，也可能是 iterator；两种都兼容
-            if let single = it as? NSObject {
-                let mirror = String(describing: single)
-                // 优先读 value 属性（官方 getDNSServerAddress 返回带 value 的对象）
-            }
-            if let v = (it as AnyObject).value(forKey: "value") as? String, !v.isEmpty {
-                dnsServers = [v]
-            }
-        } catch {
-            TunnelLog.shared.add("[ext] getDNSServerAddress: \(error.localizedDescription)")
-        }
-        if dnsServers.isEmpty { dnsServers = ["172.19.0.2"] }
-        let dnsSettings = NEDNSSettings(servers: dnsServers)
+        // 系统 DNS 直连公共解析器（不走隧道内 172.19.0.2），先把域名解析拉通
+        let dnsSettings = NEDNSSettings(servers: ["223.5.5.5", "8.8.8.8"])
         dnsSettings.matchDomains = [""]
         dnsSettings.matchDomainsNoSearch = true
         settings.dnsSettings = dnsSettings
-        TunnelLog.shared.add("[ext] DNS servers=\(dnsServers.joined(separator: ","))")
+        TunnelLog.shared.add("[ext] DNS=223.5.5.5,8.8.8.8 (system direct)")
 
-        // IPv4 地址
         var v4Addr: [String] = []
         var v4Mask: [String] = []
         if let it = options.getInet4Address() {
@@ -172,7 +152,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         let v4 = NEIPv4Settings(addresses: v4Addr, subnetMasks: v4Mask)
 
-        // include routes：优先 Libbox 配置，否则默认路由
         var ipv4Routes: [NEIPv4Route] = []
         if let it = options.getInet4RouteAddress() {
             while it.hasNext() {
@@ -186,19 +165,28 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         v4.includedRoutes = ipv4Routes
 
-        // exclude routes：Libbox 配置的排除（含节点 IP 等）
+        // Libbox 排除 + 公共 DNS，保证解析与节点出站不进 utun 黑洞
+        var excludeSeen = Set<String>()
         var ipv4Exclude: [NEIPv4Route] = []
+        func addExclude(_ ip: String) {
+            guard !excludeSeen.contains(ip) else { return }
+            excludeSeen.insert(ip)
+            ipv4Exclude.append(NEIPv4Route(destinationAddress: ip, subnetMask: "255.255.255.255"))
+        }
         if let it = options.getInet4RouteExcludeAddress() {
             while it.hasNext() {
                 if let p = it.next() {
-                    ipv4Exclude.append(NEIPv4Route(destinationAddress: p.address(), subnetMask: p.mask()))
+                    let addr = p.address()
+                    excludeSeen.insert(addr)
+                    ipv4Exclude.append(NEIPv4Route(destinationAddress: addr, subnetMask: p.mask()))
                 }
             }
         }
-        if !ipv4Exclude.isEmpty {
-            v4.excludedRoutes = ipv4Exclude
-            TunnelLog.shared.add("[ext] excludedRoutes count=\(ipv4Exclude.count)")
+        for ip in ["223.5.5.5", "8.8.8.8", "8.8.4.4", "1.1.1.1"] {
+            addExclude(ip)
         }
+        v4.excludedRoutes = ipv4Exclude
+        TunnelLog.shared.add("[ext] excludedRoutes=\(excludeSeen.sorted().joined(separator: ","))")
         settings.ipv4Settings = v4
 
         let sem = DispatchSemaphore(value: 0)
