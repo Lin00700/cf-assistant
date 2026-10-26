@@ -12,6 +12,7 @@ final class VPNManager: ObservableObject {
     private var observer: NSObjectProtocol?
 
     var isActive: Bool { status == .connected || status == .connecting || status == .reasserting }
+    var isConnected: Bool { status == .connected }
 
     var statusText: String {
         switch status {
@@ -75,20 +76,26 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    func set(on: Bool, node: ProxyNode?, bypassCN: Bool) async {
+    func set(on: Bool, store: ProxyStore) async {
         error = nil
         do {
             if on {
-                guard let node else { error = "请先添加并选择一个节点"; return }
+                guard store.nodes.contains(where: SingBoxConfig.isSupported) else {
+                    error = "请先添加并选择一个可用节点"
+                    return
+                }
                 guard let extID = extensionBundleID else {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return
                 }
+                let config = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
+                                                 mode: store.selectionMode, bypassCN: store.bypassCN,
+                                                 rules: store.routingRules)
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = node.server
-                proto.providerConfiguration = ["config": SingBoxConfig.build(node: node, bypassCN: bypassCN)]
+                proto.serverAddress = store.selected?.server ?? "sing-box"
+                proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
                 m.isEnabled = true
@@ -102,5 +109,13 @@ final class VPNManager: ObservableObject {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// 配置改动（节点、模式、规则）后让 VPN 用新配置重连
+    func restartIfActive(store: ProxyStore) async {
+        guard isActive else { return }
+        await set(on: false, store: store)
+        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        await set(on: true, store: store)
     }
 }

@@ -20,6 +20,30 @@ struct ProxyNode: Codable, Identifiable, Hashable {
     }
 }
 
+// MARK: - 节点选择与分流规则
+
+enum ProxySelectionMode: String, Codable, CaseIterable {
+    case manual
+    case automatic
+}
+
+struct ProxyRoutingRule: Codable, Identifiable, Hashable {
+    enum Kind: String, Codable, CaseIterable {
+        case domainSuffix
+        case ipCIDR
+    }
+
+    enum Target: String, Codable, CaseIterable {
+        case direct
+        case proxy
+    }
+
+    var id = UUID()
+    var kind: Kind
+    var value: String
+    var target: Target
+}
+
 // MARK: - 链接解析
 
 enum LinkParser {
@@ -247,17 +271,66 @@ enum SingBoxConfig {
                              "weibo.com", "zhihu.com", "douyin.com", "bytedance.com", "xiaohongshu.com",
                              "meituan.com", "mi.com", "xiaomi.com", "huawei.com", "sina.com.cn"]
 
-    static func build(node: ProxyNode, bypassCN: Bool) -> String {
+    static let nodeProbeURL = "https://cp.cloudflare.com/generate_204"
+    static let controlPort = 9090
+    static let controlURL = URL(string: "http://127.0.0.1:9090")!
+
+    static func nodeTag(_ n: ProxyNode) -> String {
+        "node-" + n.id.uuidString.lowercased()
+    }
+
+    static func isSupported(_ n: ProxyNode) -> Bool {
+        ["vless", "vmess", "trojan", "ss", "hysteria2"].contains(n.proto)
+            && !n.server.isEmpty && !n.secret.isEmpty && (1...65535).contains(n.port)
+    }
+
+    static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
+                      bypassCN: Bool, rules: [ProxyRoutingRule]) -> String {
+        let usable = nodes.filter(isSupported)
+        let tags = usable.map { nodeTag($0) }
+        let selectedTag = usable.first(where: { $0.id == selectedID }).map { nodeTag($0) } ?? tags.first ?? "direct"
+
+        let direct: [String: Any] = ["type": "direct", "tag": "direct"]
+        var outbounds: [[String: Any]] = usable.map { outbound($0, tag: nodeTag($0)) }
+        outbounds.append(direct)
+        if tags.isEmpty {
+            outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
+        } else {
+            let auto: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": tags,
+                                       "url": nodeProbeURL, "interval": "10m", "tolerance": 50]
+            let members: [String] = mode == .automatic ? ["auto"] + tags : tags + ["auto"]
+            let selector: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": members,
+                                           "default": mode == .automatic ? "auto" : selectedTag]
+            outbounds.append(auto)
+            outbounds.append(selector)
+        }
+
         var routeRules: [[String: Any]] = [
             ["action": "sniff"],
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
         var dnsRules: [[String: Any]] = [["outbound": "any", "server": "dns-local"]]
+
+        for r in rules {
+            let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v.isEmpty { continue }
+            let out = r.target == .direct ? "direct" : "proxy"
+            var rule: [String: Any] = ["outbound": out]
+            switch r.kind {
+            case .domainSuffix:
+                rule["domain_suffix"] = [v]
+                dnsRules.append(["domain_suffix": [v], "server": r.target == .direct ? "dns-local" : "dns-remote"])
+            case .ipCIDR:
+                rule["ip_cidr"] = [v]
+            }
+            routeRules.append(rule)
+        }
         if bypassCN {
             routeRules.append(["domain_suffix": cnSuffixes, "outbound": "direct"])
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
+
         let dnsServers: [[String: Any]] = [
             ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"],
             ["tag": "dns-local", "address": "223.5.5.5", "detour": "direct"]
@@ -265,13 +338,13 @@ enum SingBoxConfig {
         let dns: [String: Any] = ["servers": dnsServers, "rules": dnsRules, "final": "dns-remote", "strategy": "ipv4_only"]
         let tun: [String: Any] = ["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "mtu": 9000,
                                   "auto_route": true, "strict_route": false, "stack": "gvisor"]
-        let direct: [String: Any] = ["type": "direct", "tag": "direct"]
         let route: [String: Any] = ["rules": routeRules, "final": "proxy", "auto_detect_interface": true]
         let log: [String: Any] = ["level": "info", "timestamp": true]
+        let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
+        let experimental: [String: Any] = ["clash_api": clash]
         let cfg: [String: Any] = [
-            "log": log, "dns": dns, "inbounds": [tun],
-            "outbounds": [outbound(node, tag: "proxy"), direct],
-            "route": route
+            "log": log, "dns": dns, "inbounds": [tun], "outbounds": outbounds,
+            "route": route, "experimental": experimental
         ]
         let data = (try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
@@ -291,8 +364,16 @@ final class ProxyStore: ObservableObject {
     @Published var bypassCN: Bool = true {
         didSet { UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass") }
     }
+    @Published var selectionMode: ProxySelectionMode = .manual {
+        didSet { UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_mode") }
+    }
+    @Published var routingRules: [ProxyRoutingRule] = [] { didSet { saveRules() } }
+    @Published var results: [UUID: ProxyProbeResult] = [:]
+    @Published var isRefreshing = false
+    @Published var refreshError: String?
 
     private static let key = "vpn.nodes"
+    private static let rulesKey = "vpn_rules"
 
     init() {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
@@ -300,12 +381,23 @@ final class ProxyStore: ObservableObject {
         }
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
+        if let raw = UserDefaults.standard.string(forKey: "vpn_mode"), let m = ProxySelectionMode(rawValue: raw) {
+            selectionMode = m
+        }
+        if let d = UserDefaults.standard.data(forKey: Self.rulesKey),
+           let arr = try? JSONDecoder().decode([ProxyRoutingRule].self, from: d) {
+            routingRules = arr
+        }
     }
 
     var selected: ProxyNode? { nodes.first { $0.id == selectedID } ?? nodes.first }
 
     private func save() {
         if let d = try? JSONEncoder().encode(nodes) { Keychain.set(d, key: Self.key) }
+    }
+
+    private func saveRules() {
+        if let d = try? JSONEncoder().encode(routingRules) { UserDefaults.standard.set(d, forKey: Self.rulesKey) }
     }
 
     func add(_ node: ProxyNode, select: Bool = false) {
@@ -317,10 +409,41 @@ final class ProxyStore: ObservableObject {
         for n in list { add(n) }
     }
 
-    func remove(at offsets: IndexSet) {
-        let removed = offsets.map { nodes[$0].id }
-        nodes.remove(atOffsets: offsets)
-        if let s = selectedID, removed.contains(s) { selectedID = nodes.first?.id }
+    func update(_ node: ProxyNode) {
+        if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
+    }
+
+    func remove(_ node: ProxyNode) {
+        nodes.removeAll { $0.id == node.id }
+        results[node.id] = nil
+        if selectedID == node.id { selectedID = nodes.first?.id }
+    }
+
+    func removeAll() {
+        nodes = []
+        selectedID = nil
+        results = [:]
+    }
+
+    /// VPN 已连接：通过 sing-box 的代理延迟接口测真实延迟；未连接：测 TCP 端口
+    func refreshLatency(vpnConnected: Bool) async {
+        if isRefreshing || nodes.isEmpty { return }
+        isRefreshing = true
+        refreshError = nil
+        defer { isRefreshing = false }
+        if vpnConnected {
+            let usable = nodes.filter(SingBoxConfig.isSupported)
+            do {
+                results = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+            } catch {
+                refreshError = error.localizedDescription
+                var failed: [UUID: ProxyProbeResult] = [:]
+                for n in nodes { failed[n.id] = .probeFailed }
+                results = failed
+            }
+        } else {
+            results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        }
     }
 }
 
