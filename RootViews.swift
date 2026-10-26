@@ -49,6 +49,7 @@ struct LoginView: View {
                     .disabled(loading || !valid)
                 }
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle("CF 助手")
             .errorAlert($error)
         }
@@ -78,19 +79,29 @@ struct RootView: View {
     var body: some View {
         TabView {
             NavigationStack { OverviewView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("概览", systemImage: "square.grid.2x2.fill") }
             NavigationStack { ZonesView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("域名", systemImage: "globe") }
             NavigationStack { DeveloperView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("开发者", systemImage: "chevron.left.forwardslash.chevron.right") }
             NavigationStack { StorageView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("存储", systemImage: "externaldrive.fill") }
             NavigationStack { AIChatView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("AI", systemImage: "sparkles") }
             NavigationStack { MoreView() }
+                .chineseNavigationChrome()
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
         .tint(InkTheme.cinnabar)
+        .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
+        .toolbarBackground(.visible, for: .tabBar)
+        .toolbarColorScheme(.light, for: .tabBar)
+        .background(Color.clear)
         .id(session.accountId)   // 切换账户时重建所有页面
     }
 }
@@ -104,6 +115,7 @@ struct DeveloperView: View {
             NavigationLink { TunnelsView() } label: { Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted") }
             NavigationLink { PreferredIPView() } label: { Label("优选 IP", systemImage: "speedometer") }
         }
+        .scrollContentBackground(.hidden)
         .navigationTitle("开发者")
     }
 }
@@ -113,6 +125,11 @@ struct MoreView: View {
 
     var body: some View {
         List {
+            Section("外观") {
+                NavigationLink { AppearanceSettingsView() } label: {
+                    Label("背景与主题", systemImage: "paintpalette")
+                }
+            }
             Section("工具") {
                 NavigationLink { APITokensView() } label: { Label("API Token 管理", systemImage: "key.horizontal") }
             }
@@ -127,6 +144,7 @@ struct MoreView: View {
                 Button("退出登录", role: .destructive) { session.logout() }
             }
         }
+        .scrollContentBackground(.hidden)
         .navigationTitle("设置")
     }
 }

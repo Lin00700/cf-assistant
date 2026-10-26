@@ -161,11 +161,7 @@ struct OverviewView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(
-            LinearGradient(colors: [InkTheme.paperDeep.opacity(0.7), Color(.systemBackground)],
-                           startPoint: .top, endPoint: .center)
-                .ignoresSafeArea()
-        )
+        .background(AppBackdropView())
         .overlay { if !m.loaded { ProgressView() } }
         .toolbar(.hidden, for: .navigationBar)
         .task(id: ctx.acc) { await m.load(ctx) }
@@ -179,7 +175,7 @@ struct OverviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(Self.dateText).font(.subheadline).foregroundColor(.secondary)
             Text("\(Self.greeting)，\(accountName)")
-                .font(.title2.bold()).lineLimit(2)
+                .font(.system(.title2, design: .serif).bold()).lineLimit(2)
             Text(zoneSummary).font(.subheadline).foregroundColor(.secondary)
         }
         .padding(.top, 8)
@@ -326,8 +322,10 @@ extension View {
     func cardStyle() -> some View {
         self.padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemGroupedBackground))
+            .background(InkTheme.paper.opacity(0.88))
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(InkTheme.gold.opacity(0.20), lineWidth: 1))
     }
 }
 
@@ -338,9 +336,9 @@ struct StatCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.subheadline).foregroundColor(.secondary)
-            Text("\(value)").font(.system(size: 34, weight: .bold))
-            Text(caption).font(.caption).foregroundColor(.secondary)
+            Text(title).font(.subheadline).foregroundColor(InkTheme.inkSoft)
+            Text("\(value)").font(.system(size: 34, weight: .bold, design: .serif)).foregroundColor(InkTheme.ink)
+            Text(caption).font(.caption).foregroundColor(InkTheme.inkSoft)
         }
         .cardStyle()
     }

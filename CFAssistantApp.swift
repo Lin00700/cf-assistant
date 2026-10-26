@@ -6,15 +6,18 @@ struct CFAssistantApp: App {
 
     var body: some Scene {
         WindowGroup {
-            Group {
-                if session.client == nil {
-                    LoginView()
-                } else {
-                    RootView()
+            ZStack {
+                AppBackdropView()
+                Group {
+                    if session.client == nil {
+                        LoginView()
+                    } else {
+                        RootView()
+                    }
                 }
+                .environmentObject(session)
+                .tint(InkTheme.cinnabar)
             }
-            .environmentObject(session)
-            .tint(InkTheme.cinnabar)
         }
     }
 }

@@ -42,6 +42,7 @@ struct ZonesView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
             .overlay { if zones.isEmpty { EmptyHint(text: "没有域名") } }
             .refreshable { await reload() }
             .navigationDestination(for: Zone.self) { ZoneDetailView(zone: $0) }

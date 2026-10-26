@@ -9,6 +9,7 @@ struct StorageView: View {
             NavigationLink { D1DatabasesView() } label: { Label("D1 数据库", systemImage: "cylinder") }
             NavigationLink { R2BucketsView() } label: { Label("R2 存储桶", systemImage: "shippingbox") }
         }
+        .scrollContentBackground(.hidden)
         .navigationTitle("存储")
     }
 }
