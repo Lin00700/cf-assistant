@@ -111,8 +111,8 @@ enum SingBoxConfig {
             outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
         } else {
             let auto: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": tags,
-                                       "url": nodeProbeURL, "interval": "10m", "tolerance": 50]
-            let members: [String] = mode == .automatic ? ["auto"] + tags : tags + ["auto"]
+                                       "url": nodeProbeURL, "interval": "5m"]
+            let members = mode == .automatic ? ["auto"] + tags : [selectedTag] + tags.filter { $0 != selectedTag }
             let selector: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": members,
                                            "default": mode == .automatic ? "auto" : selectedTag]
             outbounds.append(auto)
@@ -145,14 +145,34 @@ enum SingBoxConfig {
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
 
+        // DNS 必须先能在「直连」上解析，否则 proxy 出站（域名节点）和远程 DNS 都会卡死。
+        // final 用 dns-local：不依赖代理；dns-remote 仅给需要走代理解析的域名用。
         let dnsServers: [[String: Any]] = [
-            ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"],
-            ["tag": "dns-local", "address": "223.5.5.5", "detour": "direct"]
+            ["tag": "dns-local", "address": "udp://223.5.5.5", "detour": "direct"],
+            ["tag": "dns-backup", "address": "udp://8.8.8.8", "detour": "direct"],
+            ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"]
         ]
-        let dns: [String: Any] = ["servers": dnsServers, "rules": dnsRules, "final": "dns-remote", "strategy": "ipv4_only", "independent_cache": true]
-        let tun: [String: Any] = ["type": "tun", "tag": "tun-in", "address": ["172.19.0.1/30"], "mtu": 9000,
-                                  "auto_route": true, "strict_route": false, "stack": "gvisor"]
-        let route: [String: Any] = ["rules": routeRules, "final": "proxy", "auto_detect_interface": true]
+        let dns: [String: Any] = [
+            "servers": dnsServers,
+            "rules": dnsRules,
+            "final": "dns-local",
+            "strategy": "ipv4_only",
+            "independent_cache": true
+        ]
+        let tun: [String: Any] = [
+            "type": "tun", "tag": "tun-in",
+            "address": ["172.19.0.1/30"],
+            "mtu": 1500,
+            "auto_route": true,
+            "strict_route": false,
+            "stack": "system"
+        ]
+        // iOS Network Extension 里由平台接口上报默认网卡；关掉 auto_detect 避免和平台监听抢
+        let route: [String: Any] = [
+            "rules": routeRules,
+            "final": "proxy",
+            "auto_detect_interface": false
+        ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
         let experimental: [String: Any] = ["clash_api": clash]
