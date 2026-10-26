@@ -12,7 +12,11 @@ struct ProxyNode: Codable, Identifiable, Hashable {
     var params: [String: String] = [:]
     var raw: String = ""         // 原始分享链接（导入时保留）
 
-    var detail: String { "\(proto.uppercased()) · \(server):\(port)" }
+    var detail: String {
+        var s = "\(proto.uppercased()) · \(server):\(port)"
+        if proto == "ss", let m = p("method") { s += " · \(m)" }
+        return s
+    }
 
     func p(_ k: String) -> String? {
         guard let v = params[k], !v.isEmpty else { return nil }
@@ -48,9 +52,7 @@ struct ProxyRoutingRule: Codable, Identifiable, Hashable {
 
 enum LinkParser {
     static func b64(_ s: String) -> Data? {
-        var t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
+        var t = s.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while t.count % 4 != 0 { t += "=" }
         return Data(base64Encoded: t)
     }
@@ -69,37 +71,35 @@ enum LinkParser {
     /// 订阅内容：Base64 或按行的分享链接
     static func parseMany(_ text: String) -> [ProxyNode] {
         var t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !t.contains("://"), let d = b64(t), let dec = String(data: d, encoding: .utf8) { t = dec }
+        if let d = b64(t), let decoded = String(data: d, encoding: .utf8) { t = decoded }
         return t.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { parse(String($0)) }
     }
 
     static func fetchSubscription(_ urlString: String) async throws -> [ProxyNode] {
-        guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            throw CFClientError.message("订阅地址无效")
-        }
+        guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
-        req.setValue("v2rayN/6.42", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 20
-        let (data, _) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw URLError(.badServerResponse)
+        }
         let nodes = parseMany(String(decoding: data, as: UTF8.self))
-        if nodes.isEmpty { throw CFClientError.message("订阅里没有解析到可用节点") }
+        if nodes.isEmpty { throw URLError(.cannotParseResponse) }
         return nodes
     }
 
     private static func generic(_ s: String, proto: String) -> ProxyNode? {
-        var main = s
-        var frag = ""
-        if let i = s.firstIndex(of: "#") {
-            main = String(s[..<i])
-            frag = String(s[s.index(after: i)...])
+        guard let url = URL(string: s) else { return nil }
+        let host = url.host ?? ""
+        let port = url.port ?? (proto == "hysteria2" ? 443 : 443)
+        let secret = url.user ?? ""
+        var params: [String: String] = [:]
+        if let items = URLComponents(string: s)?.queryItems {
+            for i in items { if let v = i.value { params[i.name] = v } }
         }
-        guard let c = URLComponents(string: main), let host = c.host, !host.isEmpty else { return nil }
-        var p: [String: String] = [:]
-        for q in c.queryItems ?? [] { p[q.name] = q.value ?? "" }
-        let secret = c.user?.removingPercentEncoding ?? c.user ?? ""
-        let name = frag.removingPercentEncoding ?? frag
+        let name = url.fragment?.removingPercentEncoding ?? host
         return ProxyNode(name: name.isEmpty ? host : name, proto: proto, server: host,
-                         port: c.port ?? 443, secret: secret, params: p, raw: s)
+                         port: port, secret: secret, params: params, raw: s)
     }
 
     private static func vmess(_ s: String) -> ProxyNode? {
@@ -107,16 +107,23 @@ enum LinkParser {
         guard let data = b64(body),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         func str(_ k: String) -> String {
-            if let v = obj[k] as? String { return v }
+            if let s = obj[k] as? String { return s }
             if let n = obj[k] as? NSNumber { return n.stringValue }
             return ""
         }
         let host = str("add")
-        guard !host.isEmpty else { return nil }
-        let net = str("net").isEmpty ? "tcp" : str("net")
-        let p: [String: String] = [
-            "type": net, "host": str("host"), "path": str("path"), "aid": str("aid"),
-            "scy": str("scy"), "sni": str("sni"), "alpn": str("alpn"), "fp": str("fp"),
+        let port = Int(str("port")) ?? 443
+        var p: [String: String] = [
+            "aid": str("aid").isEmpty ? "0" : str("aid"),
+            "scy": str("scy").isEmpty ? "auto" : str("scy"),
+            "net": str("net").isEmpty ? "tcp" : str("net"),
+            "type": str("type"),
+            "host": str("host"),
+            "path": str("path"),
+            "tls": str("tls"),
+            "sni": str("sni"),
+            "fp": str("fp"),
+            "alpn": str("alpn"),
             "security": str("tls") == "tls" ? "tls" : "none"
         ]
         return ProxyNode(name: str("ps").isEmpty ? host : str("ps"), proto: "vmess", server: host,
