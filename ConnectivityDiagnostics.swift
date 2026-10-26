@@ -213,6 +213,7 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             }
             let body = String(data: data.prefix(4096), encoding: .utf8) ?? ""
             let detail: String
+            var success = (200..<300).contains(http.statusCode)
             if kind == .http {
                 let fields = body.components(separatedBy: .newlines)
                 let colo = fields.first(where: { $0.hasPrefix("colo=") })?.dropFirst(5)
@@ -224,13 +225,16 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             } else {
                 let observedIP = body.trimmingCharacters(in: .whitespacesAndNewlines)
                     .components(separatedBy: .newlines).first ?? ""
-                detail = observedIP.isEmpty
-                    ? "HTTP \(http.statusCode) · \(url.host ?? "")"
-                    : "HTTP \(http.statusCode) · 出口 IP \(observedIP)"
+                let family = kind == .ipv4 ? AF_INET : AF_INET6
+                let isExpectedAddress = Self.isValidIPAddress(observedIP, family: family)
+                success = success && isExpectedAddress
+                detail = isExpectedAddress
+                    ? "HTTP \(http.statusCode) · 出口 IP \(observedIP)"
+                    : "HTTP \(http.statusCode) · 未返回有效的\(kind == .ipv4 ? "IPv4" : "IPv6") 地址"
             }
             return ConnectivityProbeResult(
                 kind: kind,
-                success: (200..<300).contains(http.statusCode),
+                success: success,
                 elapsedMilliseconds: elapsed,
                 detail: detail
             )
@@ -242,6 +246,17 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
                 elapsedMilliseconds: elapsed,
                 detail: "\(url.host ?? "") · \(error.localizedDescription)"
             )
+        }
+    }
+
+    private nonisolated static func isValidIPAddress(_ value: String, family: Int32) -> Bool {
+        value.withCString { addressString in
+            if family == AF_INET {
+                var address = in_addr()
+                return inet_pton(AF_INET, addressString, &address) == 1
+            }
+            var address = in6_addr()
+            return inet_pton(AF_INET6, addressString, &address) == 1
         }
     }
 }
