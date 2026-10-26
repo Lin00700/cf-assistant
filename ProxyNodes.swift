@@ -510,6 +510,10 @@ final class ProxyStore: ObservableObject {
         if let selectedID, ids.contains(selectedID) { self.selectedID = nodes.first?.id }
     }
 
+    func removeAllNodes() {
+        remove(ids: Set(nodes.map(\.id)))
+    }
+
     func remove(at offsets: IndexSet) {
         remove(ids: Set(offsets.map { nodes[$0].id }))
     }

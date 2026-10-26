@@ -38,6 +38,7 @@ private struct ProxyNodeRow: View {
     let onSelect: () -> Void
     let onEdit: () -> Void
     let onCopy: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         Button(action: onSelect) {
@@ -63,8 +64,14 @@ private struct ProxyNodeRow: View {
                 Label("编辑节点", systemImage: "pencil")
             }
             Button("复制分享链接", action: onCopy)
+            Button(role: .destructive, action: onDelete) {
+                Label("删除节点", systemImage: "trash")
+            }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive, action: onDelete) {
+                Label("删除", systemImage: "trash")
+            }
             Button(action: onEdit) {
                 Label("编辑", systemImage: "pencil")
             }
@@ -82,6 +89,7 @@ private struct ProxyNodeCategorySection: View {
     let onSelect: (ProxyNode) -> Void
     let onEdit: (ProxyNode) -> Void
     let onCopy: (ProxyNode) -> Void
+    let onDeleteNode: (ProxyNode) -> Void
     let onDelete: (Set<UUID>) -> Void
 
     var body: some View {
@@ -94,7 +102,8 @@ private struct ProxyNodeCategorySection: View {
                     isSelected: selectionMode == .manual && node.id == selectedID,
                     onSelect: { onSelect(node) },
                     onEdit: { onEdit(node) },
-                    onCopy: { onCopy(node) }
+                    onCopy: { onCopy(node) },
+                    onDelete: { onDeleteNode(node) }
                 )
             }
             .onDelete { offsets in
@@ -247,6 +256,9 @@ struct ProxyHomeView: View {
     @State private var clashExportMessage: String?
     @State private var clashExportURL: URL?
     @State private var nodeBeingEdited: ProxyNode?
+    @State private var nodeToDelete: ProxyNode?
+    @State private var showingDeleteNodeConfirmation = false
+    @State private var showingDeleteAllConfirmation = false
 
     var body: some View {
         List {
@@ -298,6 +310,7 @@ struct ProxyHomeView: View {
                     onSelect: { choose($0) },
                     onEdit: { nodeBeingEdited = $0 },
                     onCopy: { UIPasteboard.general.string = LinkParser.shareLink($0) },
+                    onDeleteNode: { requestDelete($0) },
                     onDelete: { store.remove(ids: $0) }
                 )
             }
@@ -332,7 +345,37 @@ struct ProxyHomeView: View {
         .onChange(of: store.bypassCN) { _ in restartTunnelForConfigurationChange() }
         .onChange(of: store.routingRules) { _ in restartTunnelForConfigurationChange() }
         .onChange(of: vpn.error) { e in if let e { error = e } }
-        .toolbar { EditButton() }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                EditButton()
+                if !store.nodes.isEmpty {
+                    Button {
+                        showingDeleteAllConfirmation = true
+                    } label: {
+                        Label("全删", systemImage: "trash")
+                    }
+                    .accessibilityLabel("删除全部节点")
+                }
+            }
+        }
+        .confirmationDialog("删除节点", isPresented: $showingDeleteNodeConfirmation, titleVisibility: .visible) {
+            Button("删除「\(nodeToDelete?.name ?? "此节点")」", role: .destructive) {
+                if let nodeToDelete { store.remove(ids: [nodeToDelete.id]) }
+                self.nodeToDelete = nil
+            }
+            Button("取消", role: .cancel) { nodeToDelete = nil }
+        } message: {
+            Text("只会从本机节点列表中移除，不会删除订阅地址或 Cloudflare 上的 Worker。")
+        }
+        .confirmationDialog("删除全部节点？", isPresented: $showingDeleteAllConfirmation, titleVisibility: .visible) {
+            Button("删除全部 \(store.nodes.count) 个节点", role: .destructive) {
+                store.removeAllNodes()
+                latencyByNode = [:]
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只会清空本机保存的节点；订阅地址、分流规则和 Cloudflare 上已部署的 Worker 都会保留。")
+        }
         .errorAlert($error)
     }
 
@@ -343,6 +386,11 @@ struct ProxyHomeView: View {
             do { try await vpn.select(node: n, mode: .manual) }
             catch { self.error = error.localizedDescription }
         }
+    }
+
+    private func requestDelete(_ node: ProxyNode) {
+        nodeToDelete = node
+        showingDeleteNodeConfirmation = true
     }
 
     private func setSelectionMode(_ mode: ProxySelectionMode) {
