@@ -39,6 +39,9 @@ jobs:
         run: |
           APP=$(ls -d build/App.xcarchive/Products/Applications/*.app)
           codesign -f -s - --entitlements CFTunnel.entitlements "$APP/PlugIns/CFTunnel.appex"
+          if [ -d "$APP/PlugIns/CFControl.appex" ]; then
+            codesign -f -s - --entitlements CFControl.entitlements "$APP/PlugIns/CFControl.appex"
+          fi
           codesign -f -s - --entitlements CFAssistant.entitlements "$APP"
 
       - name: Package into IPA

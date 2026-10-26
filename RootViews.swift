@@ -90,7 +90,7 @@ struct RootView: View {
             NavigationStack { MoreView() }
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
-        .tint(.orange)
+        .tint(InkTheme.cinnabar)
         .id(session.accountId)   // 切换账户时重建所有页面
     }
 }

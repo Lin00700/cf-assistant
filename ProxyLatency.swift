@@ -34,9 +34,19 @@ enum ProxyProbeResult: Equatable, Sendable {
 }
 
 enum ProxyLatencyTester {
-    private static let maxConcurrentProbes = 48
-    private static let tcpTimeout: TimeInterval = 3
-    private static let singBoxProbeTimeoutMilliseconds = 8_000
+    private static let maxConcurrentProbes = 6
+    private static let tcpTimeout: TimeInterval = 4
+    private static let singBoxProbeTimeoutMilliseconds = 10_000
+    private static let probeRetries = 2
+
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 14
+        config.timeoutIntervalForResource = 16
+        config.waitsForConnectivity = false
+        config.connectionProxyDictionary = [:]
+        return URLSession(configuration: config)
+    }()
 
     private enum SingBoxProbeOutcome: Sendable {
         case latency(Int)
@@ -114,6 +124,18 @@ enum ProxyLatencyTester {
     }
 
     private static func probeViaSingBox(_ node: ProxyNode, controlURL: URL) async -> SingBoxProbeOutcome {
+        var last: SingBoxProbeOutcome = .probeFailed
+        for attempt in 0...probeRetries {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(400_000_000 * attempt))
+            }
+            last = await probeViaSingBoxOnce(node, controlURL: controlURL)
+            if case .latency = last { return last }
+        }
+        return last
+    }
+
+    private static func probeViaSingBoxOnce(_ node: ProxyNode, controlURL: URL) async -> SingBoxProbeOutcome {
         let delayURL = controlURL.appendingPathComponent("proxies")
             .appendingPathComponent(SingBoxConfig.nodeTag(node))
             .appendingPathComponent("delay")
@@ -129,12 +151,11 @@ enum ProxyLatencyTester {
         var request = URLRequest(url: url)
         request.timeoutInterval = TimeInterval(singBoxProbeTimeoutMilliseconds) / 1_000 + 2
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
                 return .apiError("sing-box 节点探测接口未返回 HTTP 响应")
             }
             if http.statusCode == 503 || http.statusCode == 504 {
-                // sing-box omits failed nodes from group results; a failed probe does not prove the node itself is unusable.
                 return .probeFailed
             }
             guard (200..<300).contains(http.statusCode) else {
@@ -154,15 +175,17 @@ enum ProxyLatencyTester {
         guard proto != "hysteria2" && proto != "hy2" else {
             return (node.id, .requiresVPN)
         }
-        guard (1...65535).contains(node.port),
-              let port = UInt16(exactly: node.port),
-              let milliseconds = await BestCFNet.tcpPing(
-                host: node.server,
-                port: port,
-                timeout: tcpTimeout
-              ) else {
+        guard (1...65535).contains(node.port), let port = UInt16(exactly: node.port) else {
             return (node.id, .unreachable)
         }
-        return (node.id, .tcpLatency(max(1, Int(milliseconds.rounded()))))
+        for attempt in 0...probeRetries {
+            if attempt > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(250_000_000 * attempt))
+            }
+            if let milliseconds = await BestCFNet.tcpPing(host: node.server, port: port, timeout: tcpTimeout) {
+                return (node.id, .tcpLatency(max(1, Int(milliseconds.rounded()))))
+            }
+        }
+        return (node.id, .unreachable)
     }
 }

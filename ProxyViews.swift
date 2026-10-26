@@ -45,7 +45,7 @@ struct ProxyHomeView: View {
             diagnosticsSection
             nodeHeaderSection
             ForEach(visibleProtocols, id: \.self) { proto in
-                Section(header: Text("\(title(proto))（\(nodes(of: proto).count)）")) {
+                Section(header: Text("\(title(proto))（\(nodes(of: proto).count)）").foregroundColor(InkTheme.inkSoft)) {
                     ForEach(nodes(of: proto)) { n in row(n) }
                         .onDelete { idx in
                             let list = nodes(of: proto)
@@ -56,6 +56,8 @@ struct ProxyHomeView: View {
             addSection
             exportSection
         }
+        .scrollContentBackground(.hidden)
+        .background(InkTheme.paperGradient.ignoresSafeArea())
         .navigationTitle("VPN 与节点")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -103,16 +105,27 @@ struct ProxyHomeView: View {
     private var vpnSection: some View {
         Section(footer: Text(vpn.extensionBundleID == nil
                              ? "当前安装包不含 VPN 扩展：节点管理可用，开关需要「VPN 版」IPA。"
-                             : "内置 VPN 使用选中的节点。也可把节点交给 Shadowrocket 等外部客户端，但连接和分流需在外部客户端内操作。")) {
+                             : "内置 VPN 使用选中的节点。iOS 18 可在控制中心添加「云朵」开关。也可把节点交给 Shadowrocket 等外部客户端。")
+            .foregroundColor(InkTheme.inkSoft)) {
             Toggle(isOn: Binding(
                 get: { vpn.isActive },
                 set: { on in Task { await vpn.set(on: on, store: store) } }
             )) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("VPN").font(.headline)
-                    Text(vpn.statusText).font(.caption).foregroundColor(.secondary)
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(vpn.isActive ? InkTheme.cinnabar : InkTheme.ink.opacity(0.12))
+                            .frame(width: 36, height: 36)
+                        Image(systemName: vpn.isActive ? "seal.fill" : "seal")
+                            .foregroundColor(vpn.isActive ? InkTheme.paper : InkTheme.inkSoft)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("VPN").font(.headline).foregroundColor(InkTheme.ink)
+                        Text(vpn.statusText).font(.caption).foregroundColor(InkTheme.inkSoft)
+                    }
                 }
             }
+            .tint(InkTheme.cinnabar)
             Picker("节点选择", selection: $store.selectionMode) {
                 Text("手动选择").tag(ProxySelectionMode.manual)
                 Text("自动选择").tag(ProxySelectionMode.automatic)
@@ -123,26 +136,28 @@ struct ProxyHomeView: View {
             NavigationLink { TrafficCategoriesView() } label: {
                 Label("软件流量分类", systemImage: "square.grid.2x2")
             }
-            Toggle("大陆常见域名直连", isOn: $store.bypassCN)
-            Toggle("始终连接", isOn: $store.alwaysOn)
+            Toggle("大陆常见域名直连", isOn: $store.bypassCN).tint(InkTheme.cinnabar)
+            Toggle("始终连接", isOn: $store.alwaysOn).tint(InkTheme.cinnabar)
         }
+        .listRowBackground(InkTheme.paper.opacity(0.72))
     }
 
     private var diagnosticsSection: some View {
-        Section(footer: Text("测试 DNS、IPv4 / IPv6 和 HTTP，并保存可分享的诊断记录。")) {
+        Section(footer: Text("测试 DNS、IPv4 / IPv6 和 HTTP，并保存可分享的诊断记录。").foregroundColor(InkTheme.inkSoft)) {
             NavigationLink { ConnectivityDiagnosticsView() } label: {
                 HStack {
                     Label("连接诊断", systemImage: "stethoscope")
                     Spacer()
                     Text(vpn.isConnected ? "VPN 已连接" : "需先连接 VPN")
                         .font(.caption)
-                        .foregroundColor(vpn.isConnected ? .green : .secondary)
+                        .foregroundColor(vpn.isConnected ? InkTheme.pine : InkTheme.inkSoft)
                 }
             }
             NavigationLink { VPNLogView() } label: {
                 Label("VPN 运行日志", systemImage: "doc.text.magnifyingglass")
             }
         }
+        .listRowBackground(InkTheme.paper.opacity(0.72))
     }
 
     private var nodeHeaderSection: some View {
@@ -150,10 +165,12 @@ struct ProxyHomeView: View {
             Text("节点")
             Spacer()
             Text("连通 \(reachableCount)/\(testedCount)")
-                .font(.caption).foregroundColor(.secondary)
+                .font(.caption).foregroundColor(InkTheme.inkSoft)
             Button("刷新延迟") {
                 Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
-            }.font(.caption)
+            }
+            .font(.caption)
+            .foregroundColor(InkTheme.cinnabar)
         }, footer: Text(vpn.isConnected
             ? "开启 VPN 时会逐个节点通过 HTTPS（Cloudflare）探测真实代理延迟；“探测失败”不等于节点失效。左滑节点可编辑地址、端口等设置。"
             : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可连及建连延迟。左滑节点可编辑。")) {
@@ -165,26 +182,30 @@ struct ProxyHomeView: View {
     }
 
     private func row(_ n: ProxyNode) -> some View {
-        HStack {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(store.selectedID == n.id ? InkTheme.cinnabar : InkTheme.gold.opacity(0.55))
+                .frame(width: 3, height: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(n.name)
-                Text(n.detail).font(.caption2).foregroundColor(.secondary)
+                Text(n.name).foregroundColor(InkTheme.ink)
+                Text(n.detail).font(.caption2).foregroundColor(InkTheme.inkSoft)
             }
             Spacer()
             if let r = store.results[n.id] {
-                Text(r.label).font(.caption).foregroundColor(color(for: r))
+                Text(r.label).font(.caption.monospacedDigit()).foregroundColor(color(for: r))
             }
             if store.selectedID == n.id {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.orange)
+                Image(systemName: "seal.fill").foregroundColor(InkTheme.cinnabar)
             }
         }
+        .listRowBackground(InkTheme.paper.opacity(0.72))
         .contentShape(Rectangle())
         .onTapGesture {
             store.selectedID = n.id
             Task { await vpn.restartIfActive(store: store) }
         }
         .swipeActions(edge: .leading) {
-            Button { editing = n } label: { Text("编辑") }.tint(.blue)
+            Button { editing = n } label: { Text("编辑") }.tint(InkTheme.cinnabar)
         }
         .contextMenu {
             Button("复制分享链接") {
@@ -197,9 +218,9 @@ struct ProxyHomeView: View {
 
     private func color(for r: ProxyProbeResult) -> Color {
         switch r {
-        case .latency(let ms), .tcpLatency(let ms): return ms < 200 ? .green : .orange
-        case .unreachable, .probeFailed: return .orange
-        case .requiresVPN: return .secondary
+        case .latency(let ms), .tcpLatency(let ms): return ms < 200 ? InkTheme.pine : InkTheme.gold
+        case .unreachable, .probeFailed: return InkTheme.cinnabar
+        case .requiresVPN: return InkTheme.inkSoft
         }
     }
 
@@ -344,7 +365,7 @@ struct TrafficCategoriesView: View {
 
     var body: some View {
         List {
-            Section(footer: Text("按软件类型指定流量走向。默认跟随上方「节点选择」。修改后会自动重连 VPN。")) {
+            Section(footer: Text("按软件类型指定流量走向。默认跟随上方「节点选择」。修改后会自动重连 VPN。").foregroundColor(InkTheme.inkSoft)) {
                 ForEach(ProxyTrafficCategory.allCases) { category in
                     Picker(selection: Binding(
                         get: { store.policy(for: category) },
@@ -359,6 +380,8 @@ struct TrafficCategoriesView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(InkTheme.paperGradient.ignoresSafeArea())
         .navigationTitle("软件流量分类")
     }
 }
