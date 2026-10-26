@@ -93,6 +93,135 @@ enum LinkParser {
         return t.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).compactMap { parse(String($0)) }
     }
 
+    /// Imports supported proxy outbounds from a sing-box JSON config, or one standalone outbound object.
+    static func parseSingBoxConfiguration(_ text: String) throws -> [ProxyNode] {
+        guard let data = text.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw CFClientError.message("文件不是有效的 sing-box JSON 配置")
+        }
+        let outbounds = root["outbounds"] as? [[String: Any]] ?? [root]
+        let supportedTypes: Set<String> = ["vless", "vmess", "trojan", "ss", "shadowsocks", "hysteria2"]
+        let candidates = outbounds.filter { outbound in
+            guard let type = outbound["type"] as? String else { return false }
+            return supportedTypes.contains(type.lowercased())
+        }
+        guard !candidates.isEmpty else {
+            throw CFClientError.message("配置中没有可导入的受支持节点（VLESS、VMess、Trojan、Shadowsocks、Hysteria2）")
+        }
+        let nodes = candidates.compactMap(parseSingBoxOutbound)
+        guard nodes.count == candidates.count else {
+            throw CFClientError.message("部分受支持节点缺少必要字段、关闭了必需 TLS，或使用了暂不支持的传输；未导入任何节点")
+        }
+        return nodes
+    }
+
+    private static func parseSingBoxOutbound(_ outbound: [String: Any]) -> ProxyNode? {
+        func string(_ key: String) -> String? {
+            guard let value = outbound[key] as? String, !value.isEmpty else { return nil }
+            return value
+        }
+        guard let rawType = string("type"), let server = string("server"),
+              let port = outbound["server_port"] as? Int, (1...65535).contains(port) else { return nil }
+        let type = rawType.lowercased()
+        let proto = type == "shadowsocks" ? "ss" : type
+        guard ["vless", "vmess", "trojan", "ss", "hysteria2"].contains(proto) else { return nil }
+        if proto == "hysteria2" {
+            guard let tls = outbound["tls"] as? [String: Any], tls["enabled"] as? Bool == true else { return nil }
+            if let reality = tls["reality"] as? [String: Any], reality["enabled"] as? Bool == true { return nil }
+        }
+
+        var secret = ""
+        var params: [String: String] = [:]
+        switch proto {
+        case "vless":
+            guard let uuid = string("uuid") else { return nil }
+            secret = uuid
+            if let flow = string("flow") { params["flow"] = flow }
+        case "vmess":
+            guard let uuid = string("uuid") else { return nil }
+            secret = uuid
+            params["scy"] = string("security") ?? "auto"
+            params["aid"] = String((outbound["alter_id"] as? NSNumber)?.intValue ?? 0)
+        case "trojan":
+            guard let password = string("password") else { return nil }
+            secret = password
+        case "ss":
+            guard let password = string("password"), let method = string("method") else { return nil }
+            secret = password
+            params["method"] = method
+        case "hysteria2":
+            secret = string("password") ?? ""
+            if let obfs = outbound["obfs"] as? [String: Any],
+               let obfsType = obfs["type"] as? String {
+                params["obfs"] = obfsType
+                if let password = obfs["password"] as? String { params["obfs-password"] = password }
+            }
+        default:
+            return nil
+        }
+
+        if let tls = outbound["tls"] as? [String: Any] {
+            let reality = tls["reality"] as? [String: Any]
+            if reality?["enabled"] as? Bool == true {
+                params["security"] = "reality"
+                if let key = reality?["public_key"] as? String { params["pbk"] = key }
+                if let shortID = reality?["short_id"] as? String { params["sid"] = shortID }
+            } else if tls["enabled"] as? Bool == true || proto == "hysteria2" {
+                params["security"] = "tls"
+            }
+            if let serverName = tls["server_name"] as? String, !serverName.isEmpty { params["sni"] = serverName }
+            if tls["insecure"] as? Bool == true { params["insecure"] = "1" }
+            if let alpn = tls["alpn"] as? [String], !alpn.isEmpty { params["alpn"] = alpn.joined(separator: ",") }
+            if let alpn = tls["alpn"] as? String, !alpn.isEmpty { params["alpn"] = alpn }
+            if let utls = tls["utls"] as? [String: Any], utls["enabled"] as? Bool == true,
+               let fingerprint = utls["fingerprint"] as? String {
+                params["fp"] = fingerprint
+            }
+            if let ech = tls["ech"] as? [String: Any], ech["enabled"] as? Bool == true {
+                var configs = (ech["config"] as? [String] ?? []).filter { !$0.isEmpty }
+                if configs.isEmpty, let config = ech["config"] as? String, !config.isEmpty {
+                    configs = [config]
+                }
+                if !configs.isEmpty {
+                    params["ech"] = configs.joined(separator: ",")
+                } else if ech["config_path"] as? String != nil {
+                    return nil
+                } else {
+                    params["ech"] = ""
+                }
+            }
+        } else if proto == "hysteria2" {
+            params["security"] = "tls"
+        }
+
+        if ["vless", "vmess", "trojan"].contains(proto),
+           let transport = outbound["transport"] as? [String: Any] {
+            let transportType = (transport["type"] as? String ?? "").lowercased()
+            switch transportType {
+            case "ws":
+                params["type"] = "ws"
+                params["path"] = transport["path"] as? String ?? "/"
+                if let headers = transport["headers"] as? [String: Any], let host = headers["Host"] as? String {
+                    params["host"] = host
+                }
+            case "grpc":
+                params["type"] = "grpc"
+                params["serviceName"] = transport["service_name"] as? String ?? ""
+            case "httpupgrade":
+                params["type"] = "httpupgrade"
+                params["path"] = transport["path"] as? String ?? "/"
+                if let host = transport["host"] as? String { params["host"] = host }
+            case "", "tcp":
+                break
+            default:
+                return nil
+            }
+        }
+
+        return ProxyNode(name: string("tag") ?? server, proto: proto, server: server,
+                         port: port, secret: secret, params: params)
+    }
+
     static func fetchSubscription(_ urlString: String) async throws -> [ProxyNode] {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw CFClientError.message("订阅地址无效")
@@ -260,6 +389,11 @@ enum SingBoxConfig {
         } else if let fp = n.p("fp") {
             let utls: [String: Any] = ["enabled": true, "fingerprint": fp]
             t["utls"] = utls
+        }
+        if let ech = n.params["ech"] {
+            var echOptions: [String: Any] = ["enabled": true]
+            if !ech.isEmpty { echOptions["config"] = ech.split(separator: ",").map(String.init) }
+            t["ech"] = echOptions
         }
         return t
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - VPN 主页
 
@@ -552,6 +553,11 @@ struct ProxyNodeEditorView: View {
                         .font(.footnote).foregroundColor(.secondary)
                     parameterField("SNI / TLS 域名", key: "sni")
                     parameterField("ALPN（逗号分隔）", key: "alpn")
+                    parameterField("ECH 配置（可选）", key: "ech")
+                    if draft.params["ech"] != nil && draft.p("ech") == nil {
+                        Text("ECH 配置为空时，将尝试通过 DNS 自动获取。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
                     Toggle("跳过 TLS 证书验证", isOn: insecureBinding)
                 }
             } else {
@@ -561,6 +567,11 @@ struct ProxyNodeEditorView: View {
                     parameterField("TLS Peer", key: "peer")
                     parameterField("ALPN（逗号分隔）", key: "alpn")
                     parameterField("客户端指纹", key: "fp")
+                    parameterField("ECH 配置（可选）", key: "ech")
+                    if draft.params["ech"] != nil && draft.p("ech") == nil {
+                        Text("ECH 配置为空时，将尝试通过 DNS 自动获取。")
+                            .font(.footnote).foregroundColor(.secondary)
+                    }
                     parameterField("传输类型 (tcp / ws / grpc)", key: "type")
                     parameterField("Host", key: "host")
                     parameterField("路径", key: "path")
@@ -872,6 +883,7 @@ struct ImportNodesView: View {
     @ObservedObject private var store = ProxyStore.shared
     @State private var text = ""
     @State private var busy = false
+    @State private var showingConfigurationPicker = false
     @State private var message: String?
     @State private var error: String?
 
@@ -881,7 +893,15 @@ struct ImportNodesView: View {
                 .font(.system(size: 13, design: .monospaced))
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(6)
-            Text("粘贴节点链接（vless / vmess / trojan / ss / hysteria2），或订阅地址 https://…")
+            Button {
+                showingConfigurationPicker = true
+            } label: {
+                Label("从文件导入 sing-box JSON 配置", systemImage: "doc.text")
+            }
+            .buttonStyle(.bordered)
+            .disabled(busy)
+            .padding(.vertical, 6)
+            Text("也可继续粘贴节点链接（vless / vmess / trojan / ss / hysteria2）或订阅地址 https://…")
                 .font(.caption).foregroundColor(.secondary).padding(8)
         }
         .navigationTitle("导入节点")
@@ -898,6 +918,15 @@ struct ImportNodesView: View {
             Button("好") { message = nil }
         } message: { Text(message ?? "") }
         .errorAlert($error)
+        .fileImporter(isPresented: $showingConfigurationPicker, allowedContentTypes: [.json],
+                      allowsMultipleSelection: false) { result in
+            switch result {
+            case .success(let urls):
+                if let url = urls.first { Task { await importConfiguration(from: url) } }
+            case .failure(let fileError):
+                error = fileError.localizedDescription
+            }
+        }
     }
 
     private func run() async {
@@ -916,6 +945,36 @@ struct ImportNodesView: View {
                 message = "已导入 \(nodes.count) 个节点"
             }
             text = ""
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func importConfiguration(from url: URL) async {
+        guard !busy else { return }
+        busy = true
+        defer { busy = false }
+        let hasScopedAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if hasScopedAccess { url.stopAccessingSecurityScopedResource() }
+        }
+        do {
+            let maxBytes = 16 * 1024 * 1024
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            var data = Data()
+            while data.count <= maxBytes {
+                let chunk = try file.read(upToCount: min(64 * 1024, maxBytes + 1 - data.count)) ?? Data()
+                if chunk.isEmpty { break }
+                data.append(chunk)
+            }
+            guard data.count <= maxBytes else { throw CFClientError.message("配置文件超过 16 MB，无法导入") }
+            guard let configuration = String(data: data, encoding: .utf8) else {
+                throw CFClientError.message("配置文件不是 UTF-8 JSON 文件")
+            }
+            let nodes = try LinkParser.parseSingBoxConfiguration(configuration)
+            store.add(nodes)
+            message = "已从「\(url.lastPathComponent)」导入 \(nodes.count) 个受支持节点；策略组和不支持的类型不会导入"
         } catch {
             self.error = error.localizedDescription
         }
