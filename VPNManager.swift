@@ -54,7 +54,18 @@ final class VPNManager: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let m = self.manager else { return }
+                let prev = self.status
                 self.status = m.connection.status
+                // 连接中/已连接后立刻断开：多半是扩展 startTunnel 失败
+                if (prev == .connecting || prev == .connected || prev == .reasserting),
+                   self.status == .disconnected {
+                    if self.error == nil {
+                        self.error = "VPN 未能保持连接（扩展启动失败或配置被拒）。请确认已装「VPN 版」IPA，并检查节点加密方式后重试。"
+                    }
+                }
+                if self.status == .connected {
+                    self.error = nil
+                }
             }
         }
     }
@@ -66,7 +77,7 @@ final class VPNManager: ObservableObject {
         }
         // connecting / reasserting 时也允许取日志，方便排查启动失败
         if status == .invalid || status == .disconnected {
-            return "VPN 未连接（状态：\(statusText)）。请先打开 VPN 再来看。"
+            return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
         }
         return await withCheckedContinuation { cont in
             do {
