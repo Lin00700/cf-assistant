@@ -162,7 +162,7 @@ struct OverviewView: View {
             .padding(.vertical, 12)
         }
         .background(
-            LinearGradient(colors: [Color.orange.opacity(0.12), Color(.systemBackground)],
+            LinearGradient(colors: [InkTheme.paperDeep.opacity(0.7), Color(.systemBackground)],
                            startPoint: .top, endPoint: .center)
                 .ignoresSafeArea()
         )

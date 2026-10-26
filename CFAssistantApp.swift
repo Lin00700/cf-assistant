@@ -14,6 +14,7 @@ struct CFAssistantApp: App {
                 }
             }
             .environmentObject(session)
+            .tint(InkTheme.cinnabar)
         }
     }
 }
