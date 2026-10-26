@@ -64,7 +64,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             TunnelLog.shared.add("[ext] config head: \(String(config.prefix(120)))…")
         }
 
-        // 从配置里抽出节点 / DNS 的 IPv4，后面从隧道路由里排除，避免系统把出站包又送回 utun
         let excludeIPs = Self.collectExcludeIPv4(from: config)
         TunnelLog.shared.add("[ext] 排除直连 IP: \(excludeIPs.joined(separator: ", "))")
 
@@ -104,7 +103,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         TunnelLog.shared.add("[ext] sing-box 已启动")
     }
 
-    /// 解析 sing-box JSON，收集需要系统直连的 IPv4（节点 server + 常用 DNS）
     private static func collectExcludeIPv4(from config: String) -> [String] {
         var ips: Set<String> = ["223.5.5.5", "8.8.8.8", "1.1.1.1", "8.8.4.4"]
         guard let data = config.data(using: .utf8),
@@ -161,8 +159,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         monitor = nil
     }
 
-    // MARK: TUN
-
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws {
         guard let options, let ret0_ else {
             TunnelLog.shared.add("[ext] openTun 参数为空")
@@ -171,17 +167,11 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        var dnsServer = "172.19.0.2"
-        do {
-            let dns = try options.getDNSServerAddress()
-            if !dns.value.isEmpty { dnsServer = dns.value }
-        } catch {
-            TunnelLog.shared.add("[ext] getDNSServerAddress 失败，用兜底 \(dnsServer): \(error.localizedDescription)")
-        }
-        let dnsSettings = NEDNSSettings(servers: [dnsServer])
+        // 系统 DNS 走公共解析器（IP 已在 excludedRoutes），不依赖隧道内 sing-box DNS
+        let dnsSettings = NEDNSSettings(servers: ["223.5.5.5", "8.8.8.8"])
         dnsSettings.matchDomains = [""]
         settings.dnsSettings = dnsSettings
-        TunnelLog.shared.add("[ext] openTun mtu=\(options.getMTU()) dns=\(dnsServer)")
+        TunnelLog.shared.add("[ext] openTun mtu=\(options.getMTU()) dns=223.5.5.5,8.8.8.8 (system direct)")
 
         var v4Addr: [String] = []
         var v4Mask: [String] = []
@@ -199,7 +189,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
         let v4 = NEIPv4Settings(addresses: v4Addr, subnetMasks: v4Mask)
         v4.includedRoutes = [NEIPv4Route.default()]
-        // 节点 IP、公共 DNS 不进隧道：系统走物理网卡，避免黑洞
         if !excludeIPv4.isEmpty {
             v4.excludedRoutes = excludeIPv4.map { NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255") }
             TunnelLog.shared.add("[ext] excludedRoutes=\(excludeIPv4.joined(separator: ","))")
@@ -237,8 +226,6 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
             throw NSError(domain: "CFTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: "找不到 TUN 文件描述符"])
         }
     }
-
-    // MARK: 平台能力
 
     func usePlatformAutoDetectControl() -> Bool { false }
     func autoDetectControl(_ fd: Int32) throws {}
