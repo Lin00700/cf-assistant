@@ -127,12 +127,12 @@ final class VPNManager: ObservableObject {
         try await updateSelector(tag: "proxy", outbound: mode.outboundTag)
     }
 
-    /// 通过 sing-box 对各协议节点执行 HTTPS HEAD 探测；结果包含代理握手和目标请求时间。
+    /// VPN 已连接时测真实代理请求；未连接时测 TCP 节点端口连通性。
     func measureNodeLatencies(nodes: [ProxyNode]) async throws -> [UUID: ProxyProbeResult] {
-        guard isConnected else {
-            throw CFClientError.message("请先开启 VPN，再刷新真实代理延迟")
-        }
         guard !nodes.isEmpty else { return [:] }
+        guard isConnected else {
+            return await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        }
 
         let manualDelayURL = clashAPI.appendingPathComponent("group")
             .appendingPathComponent("manual").appendingPathComponent("delay")

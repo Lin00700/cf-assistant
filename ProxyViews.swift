@@ -18,8 +18,14 @@ private struct ProxyNodeLatencyLabel: View {
             if milliseconds < 150 { return .green }
             if milliseconds < 400 { return .orange }
             return .red
+        case .tcpLatency(let milliseconds):
+            if milliseconds < 150 { return .green }
+            if milliseconds < 400 { return .orange }
+            return .red
         case .unreachable:
             return .red
+        case .requiresVPN:
+            return .secondary
         }
     }
 
@@ -120,6 +126,7 @@ private struct ProxyNodeListSection: View {
     let nodes: [ProxyNode]
     let categoryNames: [String]
     @Binding var protocolFilter: String
+    let isVPNConnected: Bool
     let testedLatencyCount: Int
     let reachableLatencyCount: Int
     let isRefreshingLatency: Bool
@@ -158,7 +165,9 @@ private struct ProxyNodeListSection: View {
                 .disabled(isRefreshingLatency || nodes.isEmpty)
             }
         } footer: {
-            Text("左滑节点可编辑地址、端口等设置。开启 VPN 后可刷新真实代理延迟：逐个节点发起 HTTPS 探测，包含代理协议握手与目标请求时间。")
+            Text(isVPNConnected
+                 ? "开启 VPN 时会逐个节点发起 HTTPS 探测，显示包含代理协议握手和目标请求时间的真实代理延迟。左滑节点可编辑地址、端口等设置。"
+                 : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可连及建连延迟，不代表代理握手或实际出站速度；Hysteria2 使用 UDP，需连接 VPN 才能准确测试。左滑节点可编辑地址、端口等设置。")
         }
     }
 }
@@ -294,6 +303,7 @@ struct ProxyHomeView: View {
                 nodes: store.nodes,
                 categoryNames: categoryNames,
                 protocolFilter: $protocolFilter,
+                isVPNConnected: vpn.isConnected,
                 testedLatencyCount: testedLatencyCount,
                 reachableLatencyCount: reachableLatencyCount,
                 isRefreshingLatency: isRefreshingLatency,
