@@ -123,7 +123,7 @@ enum SingBoxConfig {
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
-        var dnsRules: [[String: Any]] = [["outbound": "any", "server": "dns-local"]]
+        var dnsRules: [[String: Any]] = []
 
         for r in rules {
             let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -149,7 +149,6 @@ enum SingBoxConfig {
             ["tag": "dns-backup", "address": "udp://8.8.8.8", "detour": "direct"],
             ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"]
         ]
-        // prefer_ipv4：和常见客户端一样，优先 IPv4；没有 IPv4 再试 IPv6，避免无 v6 时整段挂死
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
@@ -168,8 +167,7 @@ enum SingBoxConfig {
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
-            "auto_detect_interface": false,
-            "default_domain_resolver": "dns-local"
+            "auto_detect_interface": true
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
