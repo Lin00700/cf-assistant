@@ -7,7 +7,8 @@ enum ClashConfig {
     }
 
     static func build(nodes: [ProxyNode], selectedID: UUID?, selectionMode: ProxySelectionMode,
-                      bypassCN: Bool, routingRules: [ProxyRoutingRule]) -> String {
+                      bypassCN: Bool, routingRules: [ProxyRoutingRule],
+                      categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]) -> String {
         let supportedNodes = nodes.filter(isSupported)
         guard !supportedNodes.isEmpty else { return "" }
 
@@ -59,9 +60,28 @@ enum ClashConfig {
             "    type: select",
             "    proxies:",
             "      - \(quote(selectionMode == .automatic ? "自动选择" : "手动选择"))",
-            "      - \(quote(selectionMode == .automatic ? "手动选择" : "自动选择"))",
-            "rules:"
+            "      - \(quote(selectionMode == .automatic ? "手动选择" : "自动选择"))"
         ]
+        for category in ProxyTrafficCategory.allCases {
+            let policy = categoryPolicies[category] ?? .follow
+            let defaultName: String
+            switch policy {
+            case .direct: defaultName = "DIRECT"
+            case .auto: defaultName = "自动选择"
+            case .proxy, .follow: defaultName = "PROXY"
+            }
+            lines += [
+                "  - name: \(quote(category.clashName))",
+                "    type: select",
+                "    proxies:",
+                "      - \(quote("PROXY"))",
+                "      - \(quote("自动选择"))",
+                "      - DIRECT"
+            ]
+            for name in quotedNames { lines.append("      - \(name)") }
+            lines.append("    default-selected: \(quote(defaultName))")
+        }
+        lines.append("rules:")
 
         for rule in routingRules where !rule.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let target = rule.target == .direct ? "DIRECT" : "PROXY"
@@ -76,6 +96,11 @@ enum ClashConfig {
         if bypassCN {
             for suffix in SingBoxConfig.cnSuffixes {
                 lines.append("  - \(quote("DOMAIN-SUFFIX,\(suffix),DIRECT"))")
+            }
+        }
+        for category in ProxyTrafficCategory.allCases {
+            for suffix in category.suffixes {
+                lines.append("  - \(quote("DOMAIN-SUFFIX,\(suffix),\(category.clashName)"))")
             }
         }
         lines.append("  - \(quote("MATCH,PROXY"))")

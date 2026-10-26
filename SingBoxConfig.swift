@@ -105,25 +105,49 @@ enum SingBoxConfig {
         return host
     }
 
+    static func groupTag(_ category: ProxyTrafficCategory) -> String {
+        "group-" + category.rawValue
+    }
+
+    private static func groupDefault(policy: ProxyGroupPolicy, selectedTag: String) -> String {
+        switch policy {
+        case .direct: return "direct"
+        case .auto: return "auto"
+        case .proxy, .follow: return selectedTag
+        }
+    }
+
     static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
-                      bypassCN: Bool, rules: [ProxyRoutingRule]) -> String {
+                      bypassCN: Bool, rules: [ProxyRoutingRule],
+                      categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]) -> String {
         let usable = nodes.filter(isSupported)
         let tags = usable.map { nodeTag($0) }
         let selectedTag = usable.first(where: { $0.id == selectedID }).map { nodeTag($0) } ?? tags.first ?? "direct"
+        let proxyDefault = mode == .automatic ? "auto" : selectedTag
 
         let direct: [String: Any] = ["type": "direct", "tag": "direct"]
         var outbounds: [[String: Any]] = usable.map { outbound($0, tag: nodeTag($0)) }
         outbounds.append(direct)
         if tags.isEmpty {
             outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
+            for c in ProxyTrafficCategory.allCases {
+                outbounds.append(["type": "selector", "tag": groupTag(c), "outbounds": ["direct", "proxy"]])
+            }
         } else {
             let auto: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": tags,
                                        "url": nodeProbeURL, "interval": "5m"]
             let members = mode == .automatic ? ["auto"] + tags : [selectedTag] + tags.filter { $0 != selectedTag }
             let selector: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": members,
-                                           "default": mode == .automatic ? "auto" : selectedTag]
+                                           "default": proxyDefault]
             outbounds.append(auto)
             outbounds.append(selector)
+            let groupMembers = ["proxy", "auto", "direct"] + tags
+            for c in ProxyTrafficCategory.allCases {
+                let policy = categoryPolicies[c] ?? .follow
+                outbounds.append(["type": "selector", "tag": groupTag(c),
+                                  "outbounds": groupMembers,
+                                  "default": groupDefault(policy: policy, selectedTag: proxyDefault)])
+            }
         }
 
         var nodeIPs: [String] = []
@@ -162,6 +186,13 @@ enum SingBoxConfig {
         if bypassCN {
             routeRules.append(["domain_suffix": cnSuffixes, "outbound": "direct"])
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
+        }
+
+        for c in ProxyTrafficCategory.allCases {
+            routeRules.append(["domain_suffix": c.suffixes, "outbound": groupTag(c)])
+            let policy = categoryPolicies[c] ?? .follow
+            dnsRules.append(["domain_suffix": c.suffixes,
+                             "server": policy == .direct ? "dns-local" : "dns-remote"])
         }
 
         let dnsServers: [[String: Any]] = [

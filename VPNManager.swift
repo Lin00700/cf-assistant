@@ -113,7 +113,8 @@ final class VPNManager: ObservableObject {
                 }
                 let config = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
-                                                 rules: store.routingRules)
+                                                 rules: store.routingRules,
+                                                 categoryPolicies: store.categoryPolicies)
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
@@ -122,11 +123,24 @@ final class VPNManager: ObservableObject {
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
                 m.isEnabled = true
+                m.isOnDemandEnabled = store.alwaysOn
+                if store.alwaysOn {
+                    let rule = NEOnDemandRuleConnect()
+                    rule.interfaceTypeMatch = .any
+                    m.onDemandRules = [rule]
+                } else {
+                    m.onDemandRules = []
+                }
                 try await m.saveToPreferences()
                 try await m.loadFromPreferences()
                 attach(m)
                 try m.connection.startVPNTunnel()
             } else {
+                if let m = manager {
+                    m.isOnDemandEnabled = false
+                    m.onDemandRules = []
+                    try? await m.saveToPreferences()
+                }
                 manager?.connection.stopVPNTunnel()
             }
         } catch {

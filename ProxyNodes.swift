@@ -48,6 +48,85 @@ struct ProxyRoutingRule: Codable, Identifiable, Hashable {
     var target: Target
 }
 
+enum ProxyGroupPolicy: String, Codable, CaseIterable {
+    case follow
+    case proxy
+    case direct
+    case auto
+
+    var title: String {
+        switch self {
+        case .follow: return "跟随节点选择"
+        case .proxy: return "代理"
+        case .direct: return "直连"
+        case .auto: return "自动选择"
+        }
+    }
+}
+
+enum ProxyTrafficCategory: String, Codable, CaseIterable, Identifiable {
+    case ai
+    case streaming
+    case telegram
+    case google
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ai: return "AI 服务"
+        case .streaming: return "流媒体"
+        case .telegram: return "电报"
+        case .google: return "谷歌油管"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .ai: return "brain.head.profile"
+        case .streaming: return "play.tv"
+        case .telegram: return "paperplane"
+        case .google: return "magnifyingglass"
+        }
+    }
+
+    var clashName: String {
+        switch self {
+        case .ai: return "AI服务"
+        case .streaming: return "流媒体"
+        case .telegram: return "电报"
+        case .google: return "谷歌油管"
+        }
+    }
+
+    var suffixes: [String] {
+        switch self {
+        case .ai:
+            return ["openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com",
+                    "anthropic.com", "claude.ai", "deepseek.com", "groq.com",
+                    "perplexity.ai", "poe.com", "cursor.sh", "cursor.com", "x.ai",
+                    "generativelanguage.googleapis.com", "gemini.google.com",
+                    "copilot.microsoft.com", "openaiapi-site.azureedge.net"]
+        case .streaming:
+            return ["netflix.com", "nflxvideo.net", "nflximg.net", "nflxso.net",
+                    "disneyplus.com", "dssott.com", "hulu.com", "max.com", "hbo.com",
+                    "hbomax.com", "primevideo.com", "aiv-cdn.net", "spotify.com",
+                    "spotifycdn.com", "tidal.com", "tidalhifi.com", "twitch.tv",
+                    "ttvnw.net", "tiktok.com", "tiktokv.com", "tiktokcdn.com",
+                    "musical.ly", "bytedance.com", "bilibili.tv"]
+        case .telegram:
+            return ["telegram.org", "telegram.me", "t.me", "tdesktop.com",
+                    "telegra.ph", "telegram-cdn.org", "telesco.pe"]
+        case .google:
+            return ["google.com", "google.com.hk", "google.co.jp", "googleapis.com",
+                    "gstatic.com", "googleusercontent.com", "ggpht.com", "gvt1.com",
+                    "gvt2.com", "gvt3.com", "youtube.com", "youtu.be", "ytimg.com",
+                    "googlevideo.com", "youtube-nocookie.com", "withgoogle.com",
+                    "android.com", "googleadservices.com"]
+        }
+    }
+}
+
 // MARK: - 链接解析
 
 enum LinkParser {

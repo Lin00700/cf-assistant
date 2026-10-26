@@ -84,6 +84,16 @@ struct ProxyHomeView: View {
         .onChange(of: vpn.error) { e in if let e { error = e } }
         .onChange(of: store.selectionMode) { _ in Task { await vpn.restartIfActive(store: store) } }
         .onChange(of: store.bypassCN) { _ in Task { await vpn.restartIfActive(store: store) } }
+        .onChange(of: store.alwaysOn) { on in
+            Task {
+                if on && !vpn.isActive {
+                    await vpn.set(on: true, store: store)
+                } else {
+                    await vpn.restartIfActive(store: store)
+                }
+            }
+        }
+        .onChange(of: store.categoryPolicies) { _ in Task { await vpn.restartIfActive(store: store) } }
         .errorAlert($error)
         .alert("提示", isPresented: Binding(get: { toast != nil }, set: { if !$0 { toast = nil } })) {
             Button("好") { toast = nil }
@@ -110,7 +120,11 @@ struct ProxyHomeView: View {
             NavigationLink { RoutingRulesView() } label: {
                 Label("自定义分流规则（\(store.routingRules.count)）", systemImage: "arrow.triangle.branch")
             }
+            NavigationLink { TrafficCategoriesView() } label: {
+                Label("软件流量分类", systemImage: "square.grid.2x2")
+            }
             Toggle("大陆常见域名直连", isOn: $store.bypassCN)
+            Toggle("始终连接", isOn: $store.alwaysOn)
         }
     }
 
@@ -206,7 +220,8 @@ struct ProxyHomeView: View {
             Button("复制 Clash 配置（\(count) 节点）") {
                 let text = ClashConfig.build(nodes: store.nodes, selectedID: store.selectedID,
                                              selectionMode: store.selectionMode, bypassCN: store.bypassCN,
-                                             routingRules: store.routingRules)
+                                             routingRules: store.routingRules,
+                                             categoryPolicies: store.categoryPolicies)
                 UIPasteboard.general.string = text
                 toast = "已复制 Clash 配置"
             }
@@ -319,6 +334,32 @@ struct RoutingRulesView: View {
             }
         }
         .navigationTitle("分流规则")
+    }
+}
+
+// MARK: - 软件流量分类
+
+struct TrafficCategoriesView: View {
+    @ObservedObject private var store = ProxyStore.shared
+
+    var body: some View {
+        List {
+            Section(footer: Text("按软件类型指定流量走向。默认跟随上方「节点选择」。修改后会自动重连 VPN。")) {
+                ForEach(ProxyTrafficCategory.allCases) { category in
+                    Picker(selection: Binding(
+                        get: { store.policy(for: category) },
+                        set: { store.setPolicy($0, for: category) }
+                    )) {
+                        ForEach(ProxyGroupPolicy.allCases, id: \.self) { p in
+                            Text(p.title).tag(p)
+                        }
+                    } label: {
+                        Label(category.title, systemImage: category.symbol)
+                    }
+                }
+            }
+        }
+        .navigationTitle("软件流量分类")
     }
 }
 
