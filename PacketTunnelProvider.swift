@@ -259,11 +259,11 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
 
             let typeDesc: String
             switch iface.type {
-            case .wifi: typeDesc = "wifi"
-            case .cellular: typeDesc = "cellular"
-            case .wiredEthernet: typeDesc = "ethernet"
-            case .loopback: typeDesc = "loopback"
-            case .other: typeDesc = "other"
+            case Network.NWInterface.InterfaceType.wifi: typeDesc = "wifi"
+            case Network.NWInterface.InterfaceType.cellular: typeDesc = "cellular"
+            case Network.NWInterface.InterfaceType.wiredEthernet: typeDesc = "ethernet"
+            case Network.NWInterface.InterfaceType.loopback: typeDesc = "loopback"
+            case Network.NWInterface.InterfaceType.other: typeDesc = "other"
             @unknown default: typeDesc = "unknown"
             }
             TunnelLog.shared.add("[ext] 默认网卡 \(name) index=\(index) type=\(typeDesc) expensive=\(path.isExpensive) constrained=\(path.isConstrained)")
@@ -273,34 +273,30 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         m.start(queue: DispatchQueue(label: "cf.tunnel.monitor", qos: .userInitiated))
     }
 
-    private static func pickInterface(from path: NWPath) -> NWInterface? {
+    private static func pickInterface(from path: Network.NWPath) -> Network.NWInterface? {
         let ifaces = path.availableInterfaces
         if ifaces.isEmpty { return nil }
 
-        func rank(_ t: NWInterface.InterfaceType) -> Int {
-            switch t {
-            case .wifi: return 0
-            case .cellular: return 1
-            case .wiredEthernet: return 2
-            case .other: return 3
-            case .loopback: return 9
-            @unknown default: return 5
+        func rank(_ iface: Network.NWInterface) -> Int {
+            switch iface.type {
+            case Network.NWInterface.InterfaceType.wifi: return 0
+            case Network.NWInterface.InterfaceType.cellular: return 1
+            case Network.NWInterface.InterfaceType.wiredEthernet: return 2
+            case Network.NWInterface.InterfaceType.loopback: return 9
+            default: return 5
             }
         }
 
-        let filtered: [NWInterface]
-        if path.usesInterfaceType(.wifi) {
-            filtered = ifaces.filter { $0.type == .wifi }
-        } else if path.usesInterfaceType(.cellular) {
-            filtered = ifaces.filter { $0.type == .cellular }
-        } else if path.usesInterfaceType(.wiredEthernet) {
-            filtered = ifaces.filter { $0.type == .wiredEthernet }
-        } else {
-            filtered = ifaces
+        var preferred: [Network.NWInterface] = []
+        if path.usesInterfaceType(Network.NWInterface.InterfaceType.wifi) {
+            preferred = ifaces.filter { $0.type == Network.NWInterface.InterfaceType.wifi }
+        } else if path.usesInterfaceType(Network.NWInterface.InterfaceType.cellular) {
+            preferred = ifaces.filter { $0.type == Network.NWInterface.InterfaceType.cellular }
+        } else if path.usesInterfaceType(Network.NWInterface.InterfaceType.wiredEthernet) {
+            preferred = ifaces.filter { $0.type == Network.NWInterface.InterfaceType.wiredEthernet }
         }
-
-        let pool = filtered.isEmpty ? ifaces : filtered
-        return pool.sorted { rank($0.type) < rank($1.type) }.first
+        let pool = preferred.isEmpty ? ifaces : preferred
+        return pool.sorted { rank($0) < rank($1) }.first
     }
 
     func closeDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
