@@ -1,11 +1,9 @@
 import SwiftUI
 import Combine
 
-/// 全局主题状态：切换皮肤时所有观察它的界面会刷新。
-@MainActor
+/// 全局主题状态（不标 @MainActor，避免 Swift 6 静态初始化隔离错误）
 final class ThemeStore: ObservableObject {
-    /// Swift 6：允许从非隔离上下文读取 shared（颜色主题等）
-    nonisolated(unsafe) static let shared = ThemeStore()
+    static let shared = ThemeStore()
 
     @Published var skin: ChineseSkin {
         didSet {
@@ -20,8 +18,8 @@ final class ThemeStore: ObservableObject {
         skin = ChineseSkin(rawValue: raw) ?? .ink
     }
 
+    @MainActor
     func setSkin(_ new: ChineseSkin) {
-        objectWillChange.send()
         skin = new
         UserDefaults.standard.set(new.rawValue, forKey: Self.storageKey)
     }
