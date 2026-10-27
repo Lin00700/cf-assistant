@@ -25,7 +25,6 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 安装包里的 VPN 扩展（PlugIns/*.appex）的 Bundle ID。没有扩展说明装的是普通版 IPA
     var extensionBundleID: String? {
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
@@ -48,6 +47,7 @@ final class VPNManager: ObservableObject {
     private func attach(_ m: NETunnelProviderManager) {
         manager = m
         status = m.connection.status
+        updateTrafficMonitor(for: status)
         if let o = observer { NotificationCenter.default.removeObserver(o) }
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange, object: m.connection, queue: .main
@@ -56,7 +56,7 @@ final class VPNManager: ObservableObject {
                 guard let self, let m = self.manager else { return }
                 let prev = self.status
                 self.status = m.connection.status
-                // 连接中/已连接后立刻断开：多半是扩展 startTunnel 失败
+                self.updateTrafficMonitor(for: self.status)
                 if (prev == .connecting || prev == .connected || prev == .reasserting),
                    self.status == .disconnected {
                     if self.error == nil {
@@ -70,12 +70,18 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 向 VPN 扩展要最近的运行日志
+    private func updateTrafficMonitor(for status: NEVPNStatus) {
+        if status == .connected {
+            VPNTraffic.shared.startMonitoring()
+        } else {
+            VPNTraffic.shared.stopMonitoring()
+        }
+    }
+
     func fetchLog() async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"
         }
-        // connecting / reasserting 时也允许取日志，方便排查启动失败
         if status == .invalid || status == .disconnected {
             return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
         }
@@ -142,13 +148,13 @@ final class VPNManager: ObservableObject {
                     try? await m.saveToPreferences()
                 }
                 manager?.connection.stopVPNTunnel()
+                VPNTraffic.shared.stopMonitoring()
             }
         } catch {
             self.error = error.localizedDescription
         }
     }
 
-    /// 配置改动（节点、模式、规则）后让 VPN 用新配置重连
     func restartIfActive(store: ProxyStore) async {
         guard isActive else { return }
         await set(on: false, store: store)
@@ -156,7 +162,6 @@ final class VPNManager: ObservableObject {
         await set(on: true, store: store)
     }
 
-    /// 诊断单个节点的代理 HTTPS 出站，不触发自动选择组的重测或选点。
     func measureProxyEgress(node: ProxyNode) async throws -> ProxyProbeResult {
         guard isConnected else { throw CFClientError.message("VPN 未连接，无法进行代理 HTTPS 探测") }
         let results = try await ProxyLatencyTester.measureViaSingBox(nodes: [node], controlURL: SingBoxConfig.controlURL)
