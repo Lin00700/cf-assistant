@@ -9,40 +9,22 @@ final class ProxyStore: ObservableObject {
         didSet { UserDefaults.standard.set(selectedID?.uuidString, forKey: "vpn_selected") }
     }
     @Published var bypassCN: Bool = true {
-        didSet {
-            UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass")
-            scheduleVPNRestart()
-        }
+        didSet { UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass") }
     }
     @Published var selectionMode: ProxySelectionMode = .manual {
-        didSet {
-            UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_mode")
-            scheduleVPNRestart()
-        }
+        didSet { UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_mode") }
     }
-    @Published var routingRules: [ProxyRoutingRule] = [] {
-        didSet {
-            saveRules()
-            scheduleVPNRestart()
-        }
-    }
+    @Published var routingRules: [ProxyRoutingRule] = [] { didSet { saveRules() } }
     @Published var categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:] {
-        didSet {
-            saveCategoryPolicies()
-            scheduleVPNRestart()
-        }
+        didSet { saveCategoryPolicies() }
     }
     @Published var alwaysOn: Bool = false {
-        didSet {
-            UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on")
-            scheduleVPNRestart()
-        }
+        didSet { UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on") }
     }
     @Published var results: [UUID: ProxyProbeResult] = [:]
     @Published var isRefreshing = false
     @Published var refreshError: String?
 
-    private var isReady = false
     private static let key = "vpn.nodes"
     private static let rulesKey = "vpn_rules"
     private static let categoryKey = "vpn_category_policies"
@@ -51,13 +33,10 @@ final class ProxyStore: ObservableObject {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
             nodes = arr
         }
-        if let s = UserDefaults.standard.string(forKey: "vpn_selected") {
-            selectedID = UUID(uuidString: s)
-        }
+        if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
         alwaysOn = UserDefaults.standard.bool(forKey: "vpn_always_on")
-        if let raw = UserDefaults.standard.string(forKey: "vpn_mode"),
-           let m = ProxySelectionMode(rawValue: raw) {
+        if let raw = UserDefaults.standard.string(forKey: "vpn_mode"), let m = ProxySelectionMode(rawValue: raw) {
             selectionMode = m
         }
         if let d = UserDefaults.standard.data(forKey: Self.rulesKey),
@@ -68,52 +47,28 @@ final class ProxyStore: ObservableObject {
            let raw = try? JSONDecoder().decode([String: String].self, from: d) {
             var map: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]
             for (k, v) in raw {
-                if let c = ProxyTrafficCategory(rawValue: k),
-                   let p = ProxyGroupPolicy(rawValue: v) {
+                if let c = ProxyTrafficCategory(rawValue: k), let p = ProxyGroupPolicy(rawValue: v) {
                     map[c] = p
                 }
             }
             categoryPolicies = map
         }
-        isReady = true
     }
 
-    private func scheduleVPNRestart() {
-        guard isReady else { return }
-        Task {
-            let vpn = VPNManager.shared
-            if alwaysOn && !vpn.isActive {
-                await vpn.set(on: true, store: self)
-            } else {
-                await vpn.restartIfActive(store: self)
-            }
-        }
-    }
-
-    var selected: ProxyNode? {
-        nodes.first { $0.id == selectedID } ?? nodes.first
-    }
+    var selected: ProxyNode? { nodes.first { $0.id == selectedID } ?? nodes.first }
 
     private func save() {
-        if let d = try? JSONEncoder().encode(nodes) {
-            Keychain.set(d, key: Self.key)
-        }
+        if let d = try? JSONEncoder().encode(nodes) { Keychain.set(d, key: Self.key) }
     }
 
     private func saveRules() {
-        if let d = try? JSONEncoder().encode(routingRules) {
-            UserDefaults.standard.set(d, forKey: Self.rulesKey)
-        }
+        if let d = try? JSONEncoder().encode(routingRules) { UserDefaults.standard.set(d, forKey: Self.rulesKey) }
     }
 
     private func saveCategoryPolicies() {
         var raw: [String: String] = [:]
-        for (c, p) in categoryPolicies {
-            raw[c.rawValue] = p.rawValue
-        }
-        if let d = try? JSONEncoder().encode(raw) {
-            UserDefaults.standard.set(d, forKey: Self.categoryKey)
-        }
+        for (c, p) in categoryPolicies { raw[c.rawValue] = p.rawValue }
+        if let d = try? JSONEncoder().encode(raw) { UserDefaults.standard.set(d, forKey: Self.categoryKey) }
     }
 
     func policy(for category: ProxyTrafficCategory) -> ProxyGroupPolicy {
@@ -132,29 +87,21 @@ final class ProxyStore: ObservableObject {
 
     func add(_ node: ProxyNode, select: Bool = false) {
         nodes.append(node)
-        if select || selectedID == nil {
-            selectedID = node.id
-        }
+        if select || selectedID == nil { selectedID = node.id }
     }
 
     func add(_ list: [ProxyNode]) {
-        for n in list {
-            add(n)
-        }
+        for n in list { add(n) }
     }
 
     func update(_ node: ProxyNode) {
-        if let i = nodes.firstIndex(where: { $0.id == node.id }) {
-            nodes[i] = node
-        }
+        if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
     }
 
     func remove(_ node: ProxyNode) {
         nodes.removeAll { $0.id == node.id }
         results[node.id] = nil
-        if selectedID == node.id {
-            selectedID = nodes.first?.id
-        }
+        if selectedID == node.id { selectedID = nodes.first?.id }
     }
 
     func removeAll() {
@@ -171,16 +118,11 @@ final class ProxyStore: ObservableObject {
         if vpnConnected {
             let usable = nodes.filter(SingBoxConfig.isSupported)
             do {
-                results = try await ProxyLatencyTester.measureViaSingBox(
-                    nodes: usable,
-                    controlURL: SingBoxConfig.controlURL
-                )
+                results = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
             } catch {
                 refreshError = error.localizedDescription
                 var failed: [UUID: ProxyProbeResult] = [:]
-                for n in nodes {
-                    failed[n.id] = .probeFailed
-                }
+                for n in nodes { failed[n.id] = .probeFailed }
                 results = failed
             }
         } else {
@@ -191,24 +133,31 @@ final class ProxyStore: ObservableObject {
 
 enum NodeWorker {
     static func script(uuid: String) -> String {
-        "export default { async fetch() { return new Response(\"ok\"); } };"
+        """
+        import { connect } from 'cloudflare:sockets';
+        let userID = '\(uuid)';
+        export default {
+          async fetch(request) {
+            const upgradeHeader = request.headers.get('Upgrade');
+            if (!upgradeHeader || upgradeHeader !== 'websocket') {
+              return new Response('Expected Upgrade: websocket', { status: 426 });
+            }
+            const [client, server] = new WebSocketPair();
+            server.accept();
+            handleSession(server);
+            return new Response(null, { status: 101, webSocket: client });
+          }
+        };
+        async function handleSession(ws) {
+          // minimal placeholder – full worker script is deployed from app when available
+          ws.addEventListener('message', () => {});
+        }
+        """
     }
 
     static func node(name: String, host: String, address: String, uuid: String) -> ProxyNode {
-        ProxyNode(
-            name: name,
-            proto: "vless",
-            server: address,
-            port: 443,
-            secret: uuid,
-            params: [
-                "type": "ws",
-                "security": "tls",
-                "sni": host,
-                "host": host,
-                "path": "/",
-                "fp": "chrome"
-            ]
-        )
+        ProxyNode(name: name, proto: "vless", server: address, port: 443, secret: uuid,
+                  params: ["type": "ws", "security": "tls", "sni": host, "host": host,
+                           "path": "/", "fp": "chrome"])
     }
 }
