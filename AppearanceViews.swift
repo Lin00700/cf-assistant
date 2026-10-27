@@ -74,13 +74,9 @@ struct AppearanceSettingsView: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var error: String?
 
-    private var skin: ChineseSkin {
-        ChineseSkin(rawValue: skinRaw) ?? .ink
-    }
-
     var body: some View {
         List {
-            Section("中国风主题") {
+            Section {
                 ForEach(ChineseSkin.allCases) { s in
                     Button {
                         skinRaw = s.rawValue
@@ -100,6 +96,8 @@ struct AppearanceSettingsView: View {
                         }
                     }
                 }
+            } header: {
+                Text("中国风主题")
             } footer: {
                 Text("水墨 · 青绿 · 朱砂 · 月夜。切换后全局强调色与背景会更新。")
             }
