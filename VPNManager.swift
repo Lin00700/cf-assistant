@@ -47,7 +47,6 @@ final class VPNManager: ObservableObject {
     private func attach(_ m: NETunnelProviderManager) {
         manager = m
         status = m.connection.status
-        updateTrafficMonitor(for: status)
         if let o = observer { NotificationCenter.default.removeObserver(o) }
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange, object: m.connection, queue: .main
@@ -56,7 +55,6 @@ final class VPNManager: ObservableObject {
                 guard let self, let m = self.manager else { return }
                 let prev = self.status
                 self.status = m.connection.status
-                self.updateTrafficMonitor(for: self.status)
                 if (prev == .connecting || prev == .connected || prev == .reasserting),
                    self.status == .disconnected {
                     if self.error == nil {
@@ -67,14 +65,6 @@ final class VPNManager: ObservableObject {
                     self.error = nil
                 }
             }
-        }
-    }
-
-    private func updateTrafficMonitor(for status: NEVPNStatus) {
-        if status == .connected {
-            VPNTraffic.shared.startMonitoring()
-        } else {
-            VPNTraffic.shared.stopMonitoring()
         }
     }
 
@@ -148,7 +138,6 @@ final class VPNManager: ObservableObject {
                     try? await m.saveToPreferences()
                 }
                 manager?.connection.stopVPNTunnel()
-                VPNTraffic.shared.stopMonitoring()
             }
         } catch {
             self.error = error.localizedDescription
