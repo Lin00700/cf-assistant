@@ -20,7 +20,8 @@ final class ThemeStore: ObservableObject {
     }
 
     func setSkin(_ new: ChineseSkin) {
-        guard new != skin else { return }
+        objectWillChange.send()
         skin = new
+        UserDefaults.standard.set(new.rawValue, forKey: Self.storageKey)
     }
 }
