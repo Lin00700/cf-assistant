@@ -75,7 +75,6 @@ struct LoginView: View {
 
 struct RootView: View {
     @EnvironmentObject var session: Session
-    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         TabView {
@@ -101,9 +100,9 @@ struct RootView: View {
         .tint(InkTheme.cinnabar)
         .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
-        .toolbarColorScheme(InkTheme.chromeScheme, for: .tabBar)
+        .toolbarColorScheme(.light, for: .tabBar)
         .background(Color.clear)
-        .id("\(session.accountId)-\(theme.skin.rawValue)")
+        .id(session.accountId)
     }
 }
 
@@ -126,26 +125,32 @@ struct MoreView: View {
 
     var body: some View {
         List {
-            Section("外观") {
+            Section {
                 NavigationLink { AppearanceSettingsView() } label: {
-                    Label("背景与主题", systemImage: "paintpalette")
+                    Label("背景与主题", systemImage: "paintpalette.fill")
+                }
+                NavigationLink { APITokenViews() } label: {
+                    Label("API Token", systemImage: "key.fill")
                 }
             }
-            Section("工具") {
-                NavigationLink { APITokensView() } label: { Label("API Token 管理", systemImage: "key.horizontal") }
-            }
-            Section("账户") {
-                if session.accounts.count > 1 {
-                    Picker("当前账户", selection: $session.accountId) {
-                        ForEach(session.accounts) { Text($0.name).tag($0.id) }
-                    }
-                } else if let a = session.accounts.first {
-                    LabeledContent("当前账户", value: a.name)
+            Section {
+                Button(role: .destructive) {
+                    session.logout()
+                } label: {
+                    Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                 }
-                Button("退出登录", role: .destructive) { session.logout() }
             }
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("设置")
+    }
+}
+
+extension View {
+    func chineseNavigationChrome() -> some View {
+        self
+            .toolbarBackground(InkTheme.paper.opacity(0.96), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbarColorScheme(.light, for: .navigationBar)
     }
 }
