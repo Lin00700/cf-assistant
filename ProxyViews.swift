@@ -1,4 +1,5 @@
 import SwiftUI
+import NetworkExtension
 
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
@@ -171,9 +172,7 @@ struct ProxyHomeView: View {
                     .foregroundColor(InkTheme.ink)
                 Spacer()
                 if vpn.isConnected {
-                    Text("实时")
-                        .font(.caption2)
-                        .foregroundColor(InkTheme.pine)
+                    Text("实时").font(.caption2).foregroundColor(InkTheme.pine)
                 }
             }
             HStack {
@@ -209,7 +208,7 @@ struct ProxyHomeView: View {
     }
 
     private var diagnosticsSection: some View {
-        Section(footer: Text("测试 DNS、IPv4 / IPv6 和 HTTP，并保存可分享的诊断记录。").foregroundColor(InkTheme.inkSoft)) {
+        Section(footer: Text("测试 DNS、IPv4 / IPv6 和 HTTP。").foregroundColor(InkTheme.inkSoft)) {
             NavigationLink { ConnectivityDiagnosticsView() } label: {
                 HStack {
                     Label("连接诊断", systemImage: "stethoscope")
@@ -237,9 +236,7 @@ struct ProxyHomeView: View {
             }
             .font(.caption)
             .foregroundColor(InkTheme.cinnabar)
-        }, footer: Text(vpn.isConnected
-            ? "开启 VPN 时会逐个节点通过 HTTPS 探测真实代理延迟。"
-            : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口。")) {
+        }) {
             Picker("节点分类", selection: $category) {
                 Text("全部").tag("全部")
                 ForEach(protocols, id: \.self) { p in Text(title(p)).tag(title(p)) }
@@ -425,7 +422,7 @@ struct TrafficCategoriesView: View {
 
     var body: some View {
         List {
-            Section(footer: Text("按软件类型指定流量走向。修改后会自动重连 VPN。").foregroundColor(InkTheme.inkSoft)) {
+            Section(footer: Text("按软件类型指定流量走向。").foregroundColor(InkTheme.inkSoft)) {
                 ForEach(ProxyTrafficCategory.allCases) { category in
                     Picker(selection: Binding(
                         get: { store.policy(for: category) },
@@ -458,13 +455,13 @@ struct NodeDeployView: View {
 
     var body: some View {
         Form {
-            Section(footer: Text("部署 VLESS + WebSocket Worker。")) {
+            Section {
                 TextField("Worker 名称", text: $name)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("UUID", text: $uuid)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
-            Section(footer: Text("留空则用 workers.dev。")) {
+            Section {
                 TextField("连接地址（可填优选 IP）", text: $address)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
@@ -474,7 +471,6 @@ struct NodeDeployView: View {
                 }
                 .disabled(busy || name.isEmpty || uuid.isEmpty)
             }
-            if let r = result { Section { Text(r).font(.footnote) } }
             if let error { Section { Text(error).font(.footnote).foregroundColor(.red) } }
         }
         .navigationTitle("部署 Worker")
@@ -482,8 +478,6 @@ struct NodeDeployView: View {
 
     private func deploy() async {
         busy = true
-        error = nil
-        result = nil
         defer { busy = false }
         error = "请在完整版界面中使用部署功能"
     }
@@ -500,20 +494,14 @@ struct ImportNodesView: View {
     var body: some View {
         Form {
             Section {
-                TextEditor(text: $text)
-                    .frame(minHeight: 120)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Text("粘贴节点链接或订阅地址")
-                    .font(.footnote).foregroundColor(.secondary)
+                TextEditor(text: $text).frame(minHeight: 120)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
             }
             Section {
                 Button("解析") { Task { await parse() } }
                     .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            if let error {
-                Section { Text(error).foregroundColor(.red).font(.footnote) }
-            }
+            if let error { Section { Text(error).foregroundColor(.red).font(.footnote) } }
             if !nodes.isEmpty {
                 Section("将导入 \(nodes.count) 个节点") {
                     ForEach(nodes) { n in
@@ -522,17 +510,12 @@ struct ImportNodesView: View {
                             Text(n.detail).font(.caption2).foregroundColor(.secondary)
                         }
                     }
-                    Button("全部加入") {
-                        store.add(nodes)
-                        dismiss()
-                    }
+                    Button("全部加入") { store.add(nodes); dismiss() }
                 }
             }
         }
         .navigationTitle("导入节点")
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
-        }
+        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } } }
     }
 
     private func parse() async {
@@ -542,7 +525,7 @@ struct ImportNodesView: View {
         defer { busy = false }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            if t.lowercased().hasPrefix("http://") || t.lowercased().hasPrefix("https://") {
+            if t.lowercased().hasPrefix("http") {
                 nodes = try await LinkParser.fetchSubscription(t)
             } else {
                 nodes = LinkParser.parseMany(t)
