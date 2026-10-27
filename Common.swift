@@ -2,10 +2,10 @@ import SwiftUI
 
 /// 中国风主题预设
 enum ChineseSkin: String, CaseIterable, Identifiable {
-    case ink = "ink"           // 水墨宣纸
-    case cyan = "cyan"         // 青绿山水
-    case cinnabar = "cinnabar" // 朱砂金笺
-    case moon = "moon"         // 月夜玄青
+    case ink = "ink"
+    case cyan = "cyan"
+    case cinnabar = "cinnabar"
+    case moon = "moon"
 
     var id: String { rawValue }
 
@@ -29,15 +29,12 @@ enum ChineseSkin: String, CaseIterable, Identifiable {
 }
 
 enum InkTheme {
-    /// 当前皮肤（由 AppStorage 驱动，界面刷新时读最新值）
+    /// 始终读 ThemeStore，配合界面 .id(theme.skin) 可立即换肤
     static var currentSkin: ChineseSkin {
-        let raw = UserDefaults.standard.string(forKey: "appearance.chineseSkin") ?? ChineseSkin.ink.rawValue
-        return ChineseSkin(rawValue: raw) ?? .ink
+        ThemeStore.shared.skin
     }
 
     private static var skin: ChineseSkin { currentSkin }
-
-    // MARK: - 语义色（随皮肤变化）
 
     static var cinnabar: Color {
         switch skin {
@@ -113,7 +110,6 @@ enum InkTheme {
 
     static var seal: Color { cinnabar }
 
-    /// 列表行 / 卡片底
     static var cardFill: Color {
         switch skin {
         case .moon: return Color.white.opacity(0.06)
@@ -147,13 +143,11 @@ enum InkTheme {
         }
     }
 
-    /// 导航栏色系
     static var chromeScheme: ColorScheme {
         skin == .moon ? .dark : .light
     }
 }
 
-/// 把 client 和 accountId 打包，便于在 async 闭包里使用（避免跨 actor 访问 Session）
 struct Ctx {
     let c: CFClient
     let acc: String
@@ -163,7 +157,6 @@ extension Session {
     var ctx: Ctx { Ctx(c: client!, acc: accountId) }
 }
 
-/// 通用“加载 → 展示 / 报错重试”容器
 struct LoadView<T, Content: View>: View {
     let load: () async throws -> T
     let content: (T, @escaping () async -> Void) -> Content
@@ -208,7 +201,6 @@ struct LoadView<T, Content: View>: View {
 }
 
 extension View {
-    /// 简单的错误弹窗
     func errorAlert(_ message: Binding<String?>) -> some View {
         alert("出错了", isPresented: Binding(get: { message.wrappedValue != nil },
                                               set: { if !$0 { message.wrappedValue = nil } })) {
