@@ -4,7 +4,8 @@ import Combine
 /// 全局主题状态：切换皮肤时所有观察它的界面会刷新。
 @MainActor
 final class ThemeStore: ObservableObject {
-    static let shared = ThemeStore()
+    /// Swift 6：允许从非隔离上下文读取 shared（颜色主题等）
+    nonisolated(unsafe) static let shared = ThemeStore()
 
     @Published var skin: ChineseSkin {
         didSet {
