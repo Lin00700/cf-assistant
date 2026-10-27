@@ -10,129 +10,13 @@ struct ProxyHomeView: View {
     @State private var confirmClear = false
     @State private var editing: ProxyNode?
     @State private var toast: String?
-    @State private var category = "全部"
-
-    private func title(_ proto: String) -> String {
-        switch proto {
-        case "ss": return "Shadowsocks"
-        case "vless": return "VLESS"
-        case "vmess": return "VMess"
-        case "trojan": return "Trojan"
-        case "hysteria2": return "Hysteria2"
-        default: return proto.uppercased()
-        }
-    }
-
-    private var protocols: [String] {
-        var seen: [String] = []
-        for n in store.nodes where !seen.contains(n.proto) {
-            seen.append(n.proto)
-        }
-        return seen
-    }
-
-    private var visibleProtocols: [String] {
-        if category == "全部" { return protocols }
-        return protocols.filter { title($0) == category }
-    }
-
-    private func nodes(of proto: String) -> [ProxyNode] {
-        store.nodes.filter { $0.proto == proto }
-    }
 
     var body: some View {
         List {
-            Section {
-                vpnToggle
-                if vpn.isConnected || traffic.sessionUp > 0 || traffic.sessionDown > 0 {
-                    trafficRows
-                }
-                Picker("节点选择", selection: $store.selectionMode) {
-                    Text("手动选择").tag(ProxySelectionMode.manual)
-                    Text("自动选择").tag(ProxySelectionMode.automatic)
-                }
-                NavigationLink {
-                    RoutingRulesView()
-                } label: {
-                    Label("自定义分流规则（\(store.routingRules.count)）", systemImage: "arrow.triangle.branch")
-                }
-                NavigationLink {
-                    TrafficCategoriesView()
-                } label: {
-                    Label("软件流量分类", systemImage: "square.grid.2x2")
-                }
-                Toggle("大陆常见域名直连", isOn: $store.bypassCN)
-                Toggle("始终连接", isOn: $store.alwaysOn)
-            } footer: {
-                Text(vpn.extensionBundleID == nil
-                     ? "当前安装包不含 VPN 扩展。"
-                     : "内置 VPN 使用选中的节点。")
-            }
-
-            Section {
-                NavigationLink {
-                    ConnectivityDiagnosticsView()
-                } label: {
-                    Label("连接诊断", systemImage: "stethoscope")
-                }
-                NavigationLink {
-                    VPNLogView()
-                } label: {
-                    Label("VPN 运行日志", systemImage: "doc.text.magnifyingglass")
-                }
-            }
-
-            Section {
-                Picker("分类", selection: $category) {
-                    Text("全部").tag("全部")
-                    ForEach(protocols, id: \.self) { p in
-                        Text(title(p)).tag(title(p))
-                    }
-                }
-                Button("刷新延迟") {
-                    Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
-                }
-            } header: {
-                Text("节点")
-            }
-
-            ForEach(visibleProtocols, id: \.self) { proto in
-                Section(title(proto)) {
-                    ForEach(nodes(of: proto)) { n in
-                        nodeRow(n)
-                    }
-                    .onDelete { offsets in
-                        let list = nodes(of: proto)
-                        for i in offsets {
-                            store.remove(list[i])
-                        }
-                    }
-                }
-            }
-
-            Section("添加") {
-                NavigationLink {
-                    ImportNodesView()
-                } label: {
-                    Label("从链接 / 订阅导入", systemImage: "link")
-                }
-            }
-
-            Section("导出") {
-                Button("复制 Clash 配置") {
-                    let text = ClashConfig.build(
-                        nodes: store.nodes,
-                        selectedID: store.selectedID,
-                        selectionMode: store.selectionMode,
-                        bypassCN: store.bypassCN,
-                        routingRules: store.routingRules,
-                        categoryPolicies: store.categoryPolicies
-                    )
-                    UIPasteboard.general.string = text
-                    toast = "已复制"
-                }
-                .disabled(store.nodes.isEmpty)
-            }
+            vpnBlock
+            diagBlock
+            nodeBlock
+            addBlock
         }
         .navigationTitle("VPN 与节点")
         .toolbar {
@@ -161,12 +45,7 @@ struct ProxyHomeView: View {
             await store.refreshLatency(vpnConnected: vpn.isConnected)
         }
         .onChange(of: vpn.status) { _, status in
-            if status == .connected || status == .disconnected {
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    await store.refreshLatency(vpnConnected: vpn.isConnected)
-                }
-            }
+            handleStatus(status)
         }
         .onChange(of: vpn.error) { _, e in
             error = e
@@ -189,64 +68,164 @@ struct ProxyHomeView: View {
         }
     }
 
-    private var vpnToggle: some View {
-        Toggle(isOn: Binding(
-            get: { vpn.isActive },
-            set: { on in
-                Task { await vpn.set(on: on, store: store) }
+    private func handleStatus(_ status: NEVPNStatus) {
+        guard status == .connected || status == .disconnected else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await store.refreshLatency(vpnConnected: vpn.isConnected)
+        }
+    }
+
+    private var vpnBlock: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { vpn.isActive },
+                set: { on in Task { await vpn.set(on: on, store: store) } }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("VPN")
+                    Text(vpn.statusText).font(.caption).foregroundColor(.secondary)
+                }
             }
-        )) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("VPN")
-                Text(vpn.statusText).font(.caption).foregroundColor(.secondary)
+            if vpn.isConnected || traffic.sessionUp > 0 || traffic.sessionDown > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("↑ \(VPNTraffic.formatRate(traffic.uploadRate))")
+                        Spacer()
+                        Text("↓ \(VPNTraffic.formatRate(traffic.downloadRate))")
+                    }
+                    .font(.callout.monospacedDigit())
+                    Text("会话 ↑\(VPNTraffic.formatBytes(traffic.sessionUp)) ↓\(VPNTraffic.formatBytes(traffic.sessionDown))")
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                    HStack {
+                        Text("累计 ↑\(VPNTraffic.formatBytes(traffic.totalUp)) ↓\(VPNTraffic.formatBytes(traffic.totalDown))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("归零") { confirmResetTraffic = true }
+                            .font(.caption)
+                    }
+                }
+            }
+            Picker("节点选择", selection: $store.selectionMode) {
+                Text("手动选择").tag(ProxySelectionMode.manual)
+                Text("自动选择").tag(ProxySelectionMode.automatic)
+            }
+            NavigationLink {
+                RoutingRulesView()
+            } label: {
+                Text("自定义分流规则（\(store.routingRules.count)）")
+            }
+            NavigationLink {
+                TrafficCategoriesView()
+            } label: {
+                Text("软件流量分类")
+            }
+            Toggle("大陆常见域名直连", isOn: $store.bypassCN)
+            Toggle("始终连接", isOn: $store.alwaysOn)
+        } footer: {
+            Text(vpn.extensionBundleID == nil
+                 ? "当前安装包不含 VPN 扩展。"
+                 : "内置 VPN 使用选中的节点。")
+        }
+    }
+
+    private var diagBlock: some View {
+        Section {
+            NavigationLink {
+                ConnectivityDiagnosticsView()
+            } label: {
+                Text("连接诊断")
+            }
+            NavigationLink {
+                VPNLogView()
+            } label: {
+                Text("VPN 运行日志")
             }
         }
     }
 
-    private var trafficRows: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("↑ \(VPNTraffic.formatRate(traffic.uploadRate))")
-                Spacer()
-                Text("↓ \(VPNTraffic.formatRate(traffic.downloadRate))")
+    private var nodeBlock: some View {
+        Section {
+            Button("刷新延迟") {
+                Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
             }
-            .font(.callout.monospacedDigit())
-            Text("会话 ↑\(VPNTraffic.formatBytes(traffic.sessionUp)) ↓\(VPNTraffic.formatBytes(traffic.sessionDown))")
-                .font(.caption.monospacedDigit())
-                .foregroundColor(.secondary)
-            HStack {
-                Text("累计 ↑\(VPNTraffic.formatBytes(traffic.totalUp)) ↓\(VPNTraffic.formatBytes(traffic.totalDown))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button("归零") { confirmResetTraffic = true }
-                    .font(.caption)
+            ForEach(store.nodes) { n in
+                ProxyNodeRow(
+                    node: n,
+                    result: store.results[n.id],
+                    selected: store.selectedID == n.id,
+                    onSelect: {
+                        store.selectedID = n.id
+                        Task { await vpn.restartIfActive(store: store) }
+                    },
+                    onEdit: { editing = n }
+                )
             }
+            .onDelete { offsets in
+                for i in offsets {
+                    store.remove(store.nodes[i])
+                }
+            }
+        } header: {
+            Text("节点（\(store.nodes.count)）")
         }
-        .padding(.vertical, 4)
     }
 
-    private func nodeRow(_ n: ProxyNode) -> some View {
+    private var addBlock: some View {
+        Section {
+            NavigationLink {
+                ImportNodesView()
+            } label: {
+                Text("从链接 / 订阅导入")
+            }
+            Button("复制 Clash 配置") {
+                let text = ClashConfig.build(
+                    nodes: store.nodes,
+                    selectedID: store.selectedID,
+                    selectionMode: store.selectionMode,
+                    bypassCN: store.bypassCN,
+                    routingRules: store.routingRules,
+                    categoryPolicies: store.categoryPolicies
+                )
+                UIPasteboard.general.string = text
+                toast = "已复制"
+            }
+            .disabled(store.nodes.isEmpty)
+        }
+    }
+}
+
+struct ProxyNodeRow: View {
+    let node: ProxyNode
+    let result: ProxyProbeResult?
+    let selected: Bool
+    let onSelect: () -> Void
+    let onEdit: () -> Void
+
+    var body: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(n.name)
-                Text(n.detail).font(.caption2).foregroundColor(.secondary)
+                Text(node.name)
+                Text(node.detail)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
             }
             Spacer()
-            if let r = store.results[n.id] {
-                Text(r.label).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+            if let result {
+                Text(result.label)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
             }
-            if store.selectedID == n.id {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(.accentColor)
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            store.selectedID = n.id
-            Task { await vpn.restartIfActive(store: store) }
-        }
+        .onTapGesture(perform: onSelect)
         .swipeActions(edge: .leading) {
-            Button("编辑") { editing = n }
+            Button("编辑", action: onEdit)
         }
     }
 }
@@ -265,25 +244,23 @@ struct NodeEditView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("名称", text: $node.name)
-                    TextField("地址", text: $node.server)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("端口", text: $portText)
-                        .keyboardType(.numberPad)
-                    TextField(node.proto == "ss" ? "密码" : "UUID", text: $node.secret)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if node.proto == "ss" {
-                        Picker("加密", selection: Binding(
-                            get: { node.params["method"] ?? "aes-128-gcm" },
-                            set: { node.params["method"] = $0 }
-                        )) {
-                            Text("aes-128-gcm").tag("aes-128-gcm")
-                            Text("aes-256-gcm").tag("aes-256-gcm")
-                            Text("chacha20-ietf-poly1305").tag("chacha20-ietf-poly1305")
-                        }
+                TextField("名称", text: $node.name)
+                TextField("地址", text: $node.server)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("端口", text: $portText)
+                    .keyboardType(.numberPad)
+                TextField(node.proto == "ss" ? "密码" : "UUID", text: $node.secret)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if node.proto == "ss" {
+                    Picker("加密", selection: Binding(
+                        get: { node.params["method"] ?? "aes-128-gcm" },
+                        set: { node.params["method"] = $0 }
+                    )) {
+                        Text("aes-128-gcm").tag("aes-128-gcm")
+                        Text("aes-256-gcm").tag("aes-256-gcm")
+                        Text("chacha20-ietf-poly1305").tag("chacha20-ietf-poly1305")
                     }
                 }
             }
@@ -315,18 +292,16 @@ struct RoutingRulesView: View {
 
     var body: some View {
         List {
-            Section {
-                ForEach(store.routingRules) { r in
-                    HStack {
-                        Text(r.value)
-                        Spacer()
-                        Text(r.target == .direct ? "直连" : "代理")
-                            .foregroundColor(.secondary)
-                    }
+            ForEach(store.routingRules) { r in
+                HStack {
+                    Text(r.value)
+                    Spacer()
+                    Text(r.target == .direct ? "直连" : "代理")
+                        .foregroundColor(.secondary)
                 }
-                .onDelete { idx in
-                    store.routingRules.remove(atOffsets: idx)
-                }
+            }
+            .onDelete { idx in
+                store.routingRules.remove(atOffsets: idx)
             }
             Section("添加") {
                 Picker("类型", selection: $kind) {
@@ -343,7 +318,9 @@ struct RoutingRulesView: View {
                 Button("添加") {
                     let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !v.isEmpty else { return }
-                    store.routingRules.append(ProxyRoutingRule(kind: kind, value: v, target: target))
+                    store.routingRules.append(
+                        ProxyRoutingRule(kind: kind, value: v, target: target)
+                    )
                     value = ""
                 }
             }
@@ -366,7 +343,7 @@ struct TrafficCategoriesView: View {
                         Text(p.title).tag(p)
                     }
                 } label: {
-                    Label(category.title, systemImage: category.symbol)
+                    Text(category.title)
                 }
             }
         }
@@ -390,32 +367,24 @@ struct ImportNodesView: View {
 
     var body: some View {
         Form {
-            Section {
-                TextEditor(text: $text)
-                    .frame(minHeight: 120)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+            TextEditor(text: $text)
+                .frame(minHeight: 120)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("解析") {
+                Task { await parse() }
             }
-            Section {
-                Button("解析") {
-                    Task { await parse() }
-                }
-                .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if let error {
-                Section {
-                    Text(error).foregroundColor(.red).font(.footnote)
-                }
+                Text(error).foregroundColor(.red).font(.footnote)
             }
             if !nodes.isEmpty {
-                Section("将导入 \(nodes.count) 个") {
-                    ForEach(nodes) { n in
-                        Text(n.name)
-                    }
-                    Button("全部加入") {
-                        store.add(nodes)
-                        dismiss()
-                    }
+                ForEach(nodes) { n in
+                    Text(n.name)
+                }
+                Button("全部加入") {
+                    store.add(nodes)
+                    dismiss()
                 }
             }
         }
