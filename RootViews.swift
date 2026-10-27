@@ -1,7 +1,5 @@
 import SwiftUI
 
-// MARK: - 登录
-
 struct LoginView: View {
     @EnvironmentObject var session: Session
     @State private var mode: Credentials.Mode = .token
@@ -21,7 +19,7 @@ struct LoginView: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                Section(footer: Text("凭据只保存在本机钥匙串，仅用于直接请求 Cloudflare API。")) {
+                Section(footer: Text("凭据只保存在本机钥匙串。")) {
                     if mode == .token {
                         SecureField("API Token", text: $token)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -33,8 +31,10 @@ struct LoginView: View {
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                 }
-                Section(footer: Text("优选 IP 只在本机测速，不需要登录 Cloudflare。")) {
-                    NavigationLink { PreferredIPView() } label: { Label("不登录，直接使用优选 IP 工具", systemImage: "speedometer") }
+                Section {
+                    NavigationLink { PreferredIPView() } label: {
+                        Label("优选 IP 工具", systemImage: "speedometer")
+                    }
                 }
                 Section {
                     Button {
@@ -71,8 +71,6 @@ struct LoginView: View {
     }
 }
 
-// MARK: - 主界面
-
 struct RootView: View {
     @EnvironmentObject var session: Session
 
@@ -101,7 +99,6 @@ struct RootView: View {
         .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
         .toolbarColorScheme(.light, for: .tabBar)
-        .background(Color.clear)
         .id(session.accountId)
     }
 }
@@ -109,11 +106,21 @@ struct RootView: View {
 struct DeveloperView: View {
     var body: some View {
         List {
-            NavigationLink { ProxyHomeView() } label: { Label("VPN 与代理节点", systemImage: "lock.shield.fill") }
-            NavigationLink { WorkersView() } label: { Label("Workers", systemImage: "bolt.fill") }
-            NavigationLink { PagesView() } label: { Label("Pages", systemImage: "doc.richtext.fill") }
-            NavigationLink { TunnelsView() } label: { Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted") }
-            NavigationLink { PreferredIPView() } label: { Label("优选 IP", systemImage: "speedometer") }
+            NavigationLink { ProxyHomeView() } label: {
+                Label("VPN 与代理节点", systemImage: "lock.shield.fill")
+            }
+            NavigationLink { WorkersView() } label: {
+                Label("Workers", systemImage: "bolt.fill")
+            }
+            NavigationLink { PagesView() } label: {
+                Label("Pages", systemImage: "doc.richtext.fill")
+            }
+            NavigationLink { TunnelsView() } label: {
+                Label("Tunnels 隧道", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            NavigationLink { PreferredIPView() } label: {
+                Label("优选 IP", systemImage: "speedometer")
+            }
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("开发者")
@@ -129,7 +136,7 @@ struct MoreView: View {
                 NavigationLink { AppearanceSettingsView() } label: {
                     Label("背景与主题", systemImage: "paintpalette.fill")
                 }
-                NavigationLink { APITokenViews() } label: {
+                NavigationLink { APITokensView() } label: {
                     Label("API Token", systemImage: "key.fill")
                 }
             }
