@@ -9,22 +9,40 @@ final class ProxyStore: ObservableObject {
         didSet { UserDefaults.standard.set(selectedID?.uuidString, forKey: "vpn_selected") }
     }
     @Published var bypassCN: Bool = true {
-        didSet { UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass") }
+        didSet {
+            UserDefaults.standard.set(bypassCN, forKey: "vpn_bypass")
+            scheduleVPNRestart()
+        }
     }
     @Published var selectionMode: ProxySelectionMode = .manual {
-        didSet { UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_mode") }
+        didSet {
+            UserDefaults.standard.set(selectionMode.rawValue, forKey: "vpn_mode")
+            scheduleVPNRestart()
+        }
     }
-    @Published var routingRules: [ProxyRoutingRule] = [] { didSet { saveRules() } }
+    @Published var routingRules: [ProxyRoutingRule] = [] {
+        didSet {
+            saveRules()
+            scheduleVPNRestart()
+        }
+    }
     @Published var categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:] {
-        didSet { saveCategoryPolicies() }
+        didSet {
+            saveCategoryPolicies()
+            scheduleVPNRestart()
+        }
     }
     @Published var alwaysOn: Bool = false {
-        didSet { UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on") }
+        didSet {
+            UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on")
+            scheduleVPNRestart()
+        }
     }
     @Published var results: [UUID: ProxyProbeResult] = [:]
     @Published var isRefreshing = false
     @Published var refreshError: String?
 
+    private var isReady = false
     private static let key = "vpn.nodes"
     private static let rulesKey = "vpn_rules"
     private static let categoryKey = "vpn_category_policies"
@@ -52,6 +70,19 @@ final class ProxyStore: ObservableObject {
                 }
             }
             categoryPolicies = map
+        }
+        isReady = true
+    }
+
+    private func scheduleVPNRestart() {
+        guard isReady else { return }
+        Task {
+            let vpn = VPNManager.shared
+            if alwaysOn && !vpn.isActive {
+                await vpn.set(on: true, store: self)
+            } else {
+                await vpn.restartIfActive(store: self)
+            }
         }
     }
 
@@ -82,7 +113,6 @@ final class ProxyStore: ObservableObject {
         } else {
             next[category] = policy
         }
-        // 整表赋值，确保 @Published / onChange 触发，VPN 重载配置
         categoryPolicies = next
     }
 
@@ -134,7 +164,7 @@ final class ProxyStore: ObservableObject {
 
 enum NodeWorker {
     static func script(uuid: String) -> String {
-        js.replacingOccurrences(of: "__UUID__", with: uuid)
+        "export default { async fetch() { return new Response(\"ok\"); } };"
     }
 
     static func node(name: String, host: String, address: String, uuid: String) -> ProxyNode {
@@ -142,8 +172,4 @@ enum NodeWorker {
                   params: ["type": "ws", "security": "tls", "sni": host, "host": host,
                            "path": "/", "fp": "chrome"])
     }
-
-    private static let js = #"""
-export default { async fetch() { return new Response("ok"); } };
-"""#
 }
