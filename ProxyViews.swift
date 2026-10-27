@@ -1,7 +1,5 @@
 import SwiftUI
 
-// MARK: - VPN 主页
-
 struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -84,18 +82,19 @@ struct ProxyHomeView: View {
             await vpn.load()
             await store.refreshLatency(vpnConnected: vpn.isConnected)
         }
-        .onChange(of: vpn.status) { s in
-            if s == .connected || s == .disconnected {
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    await store.refreshLatency(vpnConnected: vpn.isConnected)
-                }
-            }
+        .onChange(of: vpn.status) { _, newStatus in
+            handleStatusChange(newStatus)
         }
-        .onChange(of: vpn.error) { e in if let e { error = e } }
-        .onChange(of: store.selectionMode) { _ in Task { await vpn.restartIfActive(store: store) } }
-        .onChange(of: store.bypassCN) { _ in Task { await vpn.restartIfActive(store: store) } }
-        .onChange(of: store.alwaysOn) { on in
+        .onChange(of: vpn.error) { _, e in
+            if let e { error = e }
+        }
+        .onChange(of: store.selectionMode) { _, _ in
+            Task { await vpn.restartIfActive(store: store) }
+        }
+        .onChange(of: store.bypassCN) { _, _ in
+            Task { await vpn.restartIfActive(store: store) }
+        }
+        .onChange(of: store.alwaysOn) { _, on in
             Task {
                 if on && !vpn.isActive {
                     await vpn.set(on: true, store: store)
@@ -104,11 +103,21 @@ struct ProxyHomeView: View {
                 }
             }
         }
-        .onChange(of: store.categoryPolicies) { _ in Task { await vpn.restartIfActive(store: store) } }
+        .onChange(of: store.categoryPolicies) { _, _ in
+            Task { await vpn.restartIfActive(store: store) }
+        }
         .errorAlert($error)
         .alert("提示", isPresented: Binding(get: { toast != nil }, set: { if !$0 { toast = nil } })) {
             Button("好") { toast = nil }
         } message: { Text(toast ?? "") }
+    }
+
+    private func handleStatusChange(_ newStatus: NEVPNStatus) {
+        guard newStatus == .connected || newStatus == .disconnected else { return }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await store.refreshLatency(vpnConnected: vpn.isConnected)
+        }
     }
 
     private var vpnSection: some View {
@@ -136,57 +145,7 @@ struct ProxyHomeView: View {
             }
             .tint(InkTheme.cinnabar)
             if vpn.isConnected || traffic.sessionUp > 0 || traffic.sessionDown > 0 {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("流量仪表", systemImage: "speedometer")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundColor(InkTheme.ink)
-                        Spacer()
-                        if vpn.isConnected {
-                            Text("实时")
-                                .font(.caption2)
-                                .foregroundColor(InkTheme.pine)
-                        }
-                    }
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("↑ 上传").font(.caption2).foregroundColor(InkTheme.inkSoft)
-                            Text(VPNTraffic.formatRate(traffic.uploadRate))
-                                .font(.callout.monospacedDigit().weight(.medium))
-                                .foregroundColor(InkTheme.ink)
-                        }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 2) {
-                            Text("↓ 下载").font(.caption2).foregroundColor(InkTheme.inkSoft)
-                            Text(VPNTraffic.formatRate(traffic.downloadRate))
-                                .font(.callout.monospacedDigit().weight(.medium))
-                                .foregroundColor(InkTheme.ink)
-                        }
-                    }
-                    Divider().opacity(0.35)
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("本次会话").font(.caption2).foregroundColor(InkTheme.inkSoft)
-                            Text("↑ \(VPNTraffic.formatBytes(traffic.sessionUp))  ↓ \(VPNTraffic.formatBytes(traffic.sessionDown))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundColor(InkTheme.ink)
-                        }
-                        Spacer()
-                    }
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("累计总量").font(.caption2).foregroundColor(InkTheme.inkSoft)
-                            Text("↑ \(VPNTraffic.formatBytes(traffic.totalUp))  ↓ \(VPNTraffic.formatBytes(traffic.totalDown))")
-                                .font(.caption.monospacedDigit())
-                                .foregroundColor(InkTheme.ink)
-                        }
-                        Spacer()
-                        Button("归零") { confirmResetTraffic = true }
-                            .font(.caption)
-                            .foregroundColor(InkTheme.cinnabar)
-                    }
-                }
-                .padding(.vertical, 4)
+                trafficMeter
             }
             Picker("节点选择", selection: $store.selectionMode) {
                 Text("手动选择").tag(ProxySelectionMode.manual)
@@ -202,6 +161,51 @@ struct ProxyHomeView: View {
             Toggle("始终连接", isOn: $store.alwaysOn).tint(InkTheme.cinnabar)
         }
         .listRowBackground(InkTheme.paper.opacity(0.72))
+    }
+
+    private var trafficMeter: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("流量仪表", systemImage: "speedometer")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(InkTheme.ink)
+                Spacer()
+                if vpn.isConnected {
+                    Text("实时")
+                        .font(.caption2)
+                        .foregroundColor(InkTheme.pine)
+                }
+            }
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("↑ 上传").font(.caption2).foregroundColor(InkTheme.inkSoft)
+                    Text(VPNTraffic.formatRate(traffic.uploadRate))
+                        .font(.callout.monospacedDigit().weight(.medium))
+                        .foregroundColor(InkTheme.ink)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("↓ 下载").font(.caption2).foregroundColor(InkTheme.inkSoft)
+                    Text(VPNTraffic.formatRate(traffic.downloadRate))
+                        .font(.callout.monospacedDigit().weight(.medium))
+                        .foregroundColor(InkTheme.ink)
+                }
+            }
+            Divider().opacity(0.35)
+            Text("本次会话  ↑ \(VPNTraffic.formatBytes(traffic.sessionUp))  ↓ \(VPNTraffic.formatBytes(traffic.sessionDown))")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(InkTheme.ink)
+            HStack {
+                Text("累计总量  ↑ \(VPNTraffic.formatBytes(traffic.totalUp))  ↓ \(VPNTraffic.formatBytes(traffic.totalDown))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(InkTheme.ink)
+                Spacer()
+                Button("归零") { confirmResetTraffic = true }
+                    .font(.caption)
+                    .foregroundColor(InkTheme.cinnabar)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     private var diagnosticsSection: some View {
@@ -313,8 +317,6 @@ struct ProxyHomeView: View {
     }
 }
 
-// MARK: - 节点编辑
-
 struct NodeEditView: View {
     @ObservedObject private var store = ProxyStore.shared
     @Environment(\.dismiss) private var dismiss
@@ -372,8 +374,6 @@ struct NodeEditView: View {
     }
 }
 
-// MARK: - 自定义分流规则
-
 struct RoutingRulesView: View {
     @ObservedObject private var store = ProxyStore.shared
     @State private var kind: ProxyRoutingRule.Kind = .domainSuffix
@@ -420,8 +420,6 @@ struct RoutingRulesView: View {
     }
 }
 
-// MARK: - 软件流量分类
-
 struct TrafficCategoriesView: View {
     @ObservedObject private var store = ProxyStore.shared
 
@@ -448,8 +446,6 @@ struct TrafficCategoriesView: View {
     }
 }
 
-// MARK: - 部署节点（Cloudflare Worker）
-
 struct NodeDeployView: View {
     @ObservedObject private var store = ProxyStore.shared
     @Environment(\.dismiss) private var dismiss
@@ -462,7 +458,7 @@ struct NodeDeployView: View {
 
     var body: some View {
         Form {
-            Section(footer: Text("部署 VLESS + WebSocket Worker，成功后节点自动加入。")) {
+            Section(footer: Text("部署 VLESS + WebSocket Worker。")) {
                 TextField("Worker 名称", text: $name)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 TextField("UUID", text: $uuid)
@@ -493,8 +489,6 @@ struct NodeDeployView: View {
     }
 }
 
-// MARK: - 导入节点
-
 struct ImportNodesView: View {
     @ObservedObject private var store = ProxyStore.shared
     @Environment(\.dismiss) private var dismiss
@@ -510,7 +504,7 @@ struct ImportNodesView: View {
                     .frame(minHeight: 120)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                Text("粘贴节点链接（vless / vmess / trojan / ss / hysteria2），或订阅地址 https://…")
+                Text("粘贴节点链接或订阅地址")
                     .font(.footnote).foregroundColor(.secondary)
             }
             Section {
@@ -559,8 +553,6 @@ struct ImportNodesView: View {
         }
     }
 }
-
-// MARK: - VPN 日志
 
 struct VPNLogView: View {
     @ObservedObject private var vpn = VPNManager.shared
