@@ -14,6 +14,7 @@ struct ProxyHomeView: View {
                 )) {
                     Text(vpn.statusText)
                 }
+                TrafficMeterRows()
                 Picker("模式", selection: $store.selectionMode) {
                     Text("手动").tag(ProxySelectionMode.manual)
                     Text("自动").tag(ProxySelectionMode.automatic)
@@ -72,6 +73,39 @@ struct ProxyHomeView: View {
             Button("好") { error = nil }
         } message: {
             Text(error ?? "")
+        }
+    }
+}
+
+/// 独立出来，避免把 ProxyHomeView 的 body 搞复杂触发类型检查超时
+struct TrafficMeterRows: View {
+    @ObservedObject private var traffic = VPNTraffic.shared
+    @State private var confirmReset = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("↑ \(VPNTraffic.formatRate(traffic.uploadRate))")
+                Spacer()
+                Text("↓ \(VPNTraffic.formatRate(traffic.downloadRate))")
+            }
+            .font(.callout.monospacedDigit())
+            Text("会话 ↑\(VPNTraffic.formatBytes(traffic.sessionUp))  ↓\(VPNTraffic.formatBytes(traffic.sessionDown))")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.secondary)
+            HStack {
+                Text("累计 ↑\(VPNTraffic.formatBytes(traffic.totalUp))  ↓\(VPNTraffic.formatBytes(traffic.totalDown))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("归零") { confirmReset = true }
+                    .font(.caption)
+            }
+        }
+        .confirmationDialog("流量归零", isPresented: $confirmReset, titleVisibility: .visible) {
+            Button("仅清本次会话") { traffic.resetSession() }
+            Button("全部归零", role: .destructive) { traffic.resetAll() }
+            Button("取消", role: .cancel) {}
         }
     }
 }
