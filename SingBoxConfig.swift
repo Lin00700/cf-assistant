@@ -117,6 +117,15 @@ enum SingBoxConfig {
         }
     }
 
+    /// 分类策略 → 最终出站（不绕选择器）
+    private static func outboundForPolicy(_ policy: ProxyGroupPolicy, hasNodes: Bool) -> String {
+        switch policy {
+        case .direct: return "direct"
+        case .auto: return hasNodes ? "auto" : "proxy"
+        case .proxy, .follow: return "proxy"
+        }
+    }
+
     static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
                       bypassCN: Bool, rules: [ProxyRoutingRule],
                       categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]) -> String {
@@ -144,9 +153,10 @@ enum SingBoxConfig {
             let groupMembers = ["proxy", "auto", "direct"] + tags
             for c in ProxyTrafficCategory.allCases {
                 let policy = categoryPolicies[c] ?? .follow
+                let def = groupDefault(policy: policy, selectedTag: proxyDefault)
                 outbounds.append(["type": "selector", "tag": groupTag(c),
                                   "outbounds": groupMembers,
-                                  "default": groupDefault(policy: policy, selectedTag: proxyDefault)])
+                                  "default": def])
             }
         }
 
@@ -157,8 +167,9 @@ enum SingBoxConfig {
             }
         }
 
+        // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
         var routeRules: [[String: Any]] = [
-            ["action": "sniff"],
+            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic"]],
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
@@ -188,11 +199,15 @@ enum SingBoxConfig {
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
 
+        // 分类：按策略直接指向 proxy / auto / direct（改完立刻进配置，不依赖选择器状态）
         for c in ProxyTrafficCategory.allCases {
-            routeRules.append(["domain_suffix": c.suffixes, "outbound": groupTag(c)])
             let policy = categoryPolicies[c] ?? .follow
-            dnsRules.append(["domain_suffix": c.suffixes,
-                             "server": policy == .direct ? "dns-local" : "dns-remote"])
+            let out = outboundForPolicy(policy, hasNodes: !tags.isEmpty)
+            if !c.suffixes.isEmpty {
+                routeRules.append(["domain_suffix": c.suffixes, "outbound": out])
+                dnsRules.append(["domain_suffix": c.suffixes,
+                                 "server": policy == .direct ? "dns-local" : "dns-remote"])
+            }
         }
 
         let dnsServers: [[String: Any]] = [

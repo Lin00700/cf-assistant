@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - 节点存储
-
 @MainActor
 final class ProxyStore: ObservableObject {
     static let shared = ProxyStore()
@@ -78,11 +76,14 @@ final class ProxyStore: ObservableObject {
     }
 
     func setPolicy(_ policy: ProxyGroupPolicy, for category: ProxyTrafficCategory) {
+        var next = categoryPolicies
         if policy == .follow {
-            categoryPolicies[category] = nil
+            next.removeValue(forKey: category)
         } else {
-            categoryPolicies[category] = policy
+            next[category] = policy
         }
+        // 整表赋值，确保 @Published / onChange 触发，VPN 重载配置
+        categoryPolicies = next
     }
 
     func add(_ node: ProxyNode, select: Bool = false) {
@@ -110,7 +111,6 @@ final class ProxyStore: ObservableObject {
         results = [:]
     }
 
-    /// VPN 已连接：通过 sing-box 的代理延迟接口测真实延迟；未连接：测 TCP 端口
     func refreshLatency(vpnConnected: Bool) async {
         if isRefreshing || nodes.isEmpty { return }
         isRefreshing = true
@@ -132,8 +132,6 @@ final class ProxyStore: ObservableObject {
     }
 }
 
-// MARK: - 部署到 Cloudflare Worker 的 VLESS-WS 节点
-
 enum NodeWorker {
     static func script(uuid: String) -> String {
         js.replacingOccurrences(of: "__UUID__", with: uuid)
@@ -146,7 +144,6 @@ enum NodeWorker {
     }
 
     private static let js = #"""
-// worker script restored later
 export default { async fetch() { return new Response("ok"); } };
 """#
 }
