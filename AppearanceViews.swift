@@ -8,7 +8,7 @@ extension View {
     func chineseNavigationChrome() -> some View {
         self.toolbarBackground(InkTheme.paper.opacity(0.96), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.light, for: .navigationBar)
+            .toolbarColorScheme(InkTheme.chromeScheme, for: .navigationBar)
             .scrollContentBackground(.hidden)
             .background(Color.clear)
     }
@@ -19,56 +19,119 @@ extension View {
 struct AppBackdropView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
     @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
+
+    private var skin: ChineseSkin { ChineseSkin(rawValue: skinRaw) ?? .ink }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                paperBackdrop
+                paperBackdrop(size: proxy.size)
 
                 if let url = WallpaperStore.url(for: wallpaperFilename) {
                     WallpaperMediaView(url: url)
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .clipped()
-                        .overlay(Color(.systemBackground).opacity(wallpaperWash))
+                        .overlay(washColor.opacity(wallpaperWash))
                         .transition(.opacity)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .animation(.easeInOut(duration: 0.25), value: wallpaperFilename)
+            .animation(.easeInOut(duration: 0.28), value: wallpaperFilename)
+            .animation(.easeInOut(duration: 0.35), value: skinRaw)
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
     }
 
-    private var paperBackdrop: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                LinearGradient(
-                    colors: [InkTheme.paperDeep.opacity(0.72), InkTheme.paper, Color(.systemBackground)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                RadialGradient(
-                    colors: [InkTheme.gold.opacity(0.10), .clear],
-                    center: .topTrailing,
-                    startRadius: 8,
-                    endRadius: proxy.size.width * 0.72
-                )
-                Circle()
-                    .stroke(InkTheme.cinnabar.opacity(0.08), lineWidth: 1)
-                    .frame(width: 178, height: 178)
-                    .overlay(Circle().stroke(InkTheme.cinnabar.opacity(0.045), lineWidth: 18).padding(19))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .offset(x: 65, y: -42)
-                InkMountainShape()
-                    .fill(InkTheme.pine.opacity(0.075))
-                    .frame(height: proxy.size.height * 0.25)
-                InkMountainShape()
-                    .fill(InkTheme.inkSoft.opacity(0.045))
-                    .scaleEffect(x: -1, y: 1)
-                    .frame(height: proxy.size.height * 0.17)
-                    .offset(y: 12)
+    private var washColor: Color {
+        skin == .moon ? Color(red: 0.08, green: 0.10, blue: 0.14) : Color(.systemBackground)
+    }
+
+    private func paperBackdrop(size: CGSize) -> some View {
+        ZStack(alignment: .bottom) {
+            InkTheme.paperGradient
+
+            // 右上角朱印 / 月晕
+            Group {
+                switch skin {
+                case .moon:
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [Color.white.opacity(0.18), Color.white.opacity(0.04), .clear],
+                                center: .center,
+                                startRadius: 4,
+                                endRadius: 90
+                            )
+                        )
+                        .frame(width: 160, height: 160)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: 40, y: -30)
+                case .cinnabar:
+                    Circle()
+                        .stroke(InkTheme.cinnabar.opacity(0.18), lineWidth: 1.5)
+                        .frame(width: 120, height: 120)
+                        .overlay(
+                            Text("雲")
+                                .font(.system(size: 36, weight: .medium, design: .serif))
+                                .foregroundColor(InkTheme.cinnabar.opacity(0.22))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: 28, y: -18)
+                default:
+                    Circle()
+                        .stroke(InkTheme.cinnabar.opacity(0.10), lineWidth: 1)
+                        .frame(width: 178, height: 178)
+                        .overlay(Circle().stroke(InkTheme.cinnabar.opacity(0.05), lineWidth: 18).padding(19))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .offset(x: 65, y: -42)
+                }
             }
+
+            // 金色光晕
+            RadialGradient(
+                colors: [InkTheme.gold.opacity(skin == .moon ? 0.06 : 0.12), .clear],
+                center: .topTrailing,
+                startRadius: 8,
+                endRadius: size.width * 0.72
+            )
+
+            // 远山两层
+            InkMountainShape()
+                .fill(mountainPrimary)
+                .frame(height: size.height * 0.26)
+            InkMountainShape()
+                .fill(mountainSecondary)
+                .scaleEffect(x: -1, y: 1)
+                .frame(height: size.height * 0.18)
+                .offset(y: 14)
+
+            // 底部淡雾
+            LinearGradient(
+                colors: [.clear, InkTheme.paper.opacity(skin == .moon ? 0.35 : 0.55)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: size.height * 0.22)
+        }
+    }
+
+    private var mountainPrimary: Color {
+        switch skin {
+        case .ink: return InkTheme.pine.opacity(0.08)
+        case .cyan: return Color(red: 0.20, green: 0.45, blue: 0.40).opacity(0.14)
+        case .cinnabar: return Color(red: 0.45, green: 0.28, blue: 0.16).opacity(0.10)
+        case .moon: return Color.white.opacity(0.05)
+        }
+    }
+
+    private var mountainSecondary: Color {
+        switch skin {
+        case .ink: return InkTheme.inkSoft.opacity(0.05)
+        case .cyan: return Color(red: 0.25, green: 0.38, blue: 0.48).opacity(0.10)
+        case .cinnabar: return InkTheme.gold.opacity(0.08)
+        case .moon: return Color.white.opacity(0.03)
         }
     }
 }
@@ -202,14 +265,70 @@ private enum WallpaperError: LocalizedError {
 struct AppearanceSettingsView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
     @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
     @State private var selectedItem: PhotosPickerItem?
     @State private var isLoading = false
     @State private var errorMessage: String?
+
+    private var selectedSkin: ChineseSkin {
+        get { ChineseSkin(rawValue: skinRaw) ?? .ink }
+        set { skinRaw = newValue.rawValue }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 preview
+
+                // 中国风皮肤
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("中国风皮肤", systemImage: "paintpalette")
+                        .font(.headline)
+                        .foregroundColor(InkTheme.ink)
+
+                    ForEach(ChineseSkin.allCases) { skin in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                skinRaw = skin.rawValue
+                            }
+                        } label: {
+                            HStack(spacing: 14) {
+                                skinSwatch(skin)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(skin.title)
+                                        .font(.system(.body, design: .serif).weight(.medium))
+                                        .foregroundColor(InkTheme.ink)
+                                    Text(skin.subtitle)
+                                        .font(.caption)
+                                        .foregroundColor(InkTheme.inkSoft)
+                                }
+                                Spacer()
+                                if skinRaw == skin.rawValue {
+                                    Image(systemName: "checkmark.seal.fill")
+                                        .foregroundColor(InkTheme.cinnabar)
+                                }
+                            }
+                            .padding(12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(skinRaw == skin.rawValue
+                                          ? InkTheme.cinnabar.opacity(0.08)
+                                          : InkTheme.paper.opacity(0.55))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .stroke(skinRaw == skin.rawValue
+                                            ? InkTheme.cinnabar.opacity(0.45)
+                                            : InkTheme.gold.opacity(0.15), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(16)
+                .background(InkTheme.paper.opacity(0.86))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(InkTheme.gold.opacity(0.20), lineWidth: 1))
 
                 VStack(spacing: 12) {
                     PhotosPicker(selection: $selectedItem, matching: .images, preferredItemEncoding: .current, photoLibrary: .shared()) {
@@ -225,7 +344,7 @@ struct AppearanceSettingsView: View {
 
                     if !wallpaperFilename.isEmpty {
                         Button(role: .destructive, action: clearWallpaper) {
-                            Label("恢复水墨宣纸背景", systemImage: "arrow.uturn.backward")
+                            Label("恢复主题默认背景", systemImage: "arrow.uturn.backward")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
                         }
@@ -253,7 +372,7 @@ struct AppearanceSettingsView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(InkTheme.gold.opacity(0.20), lineWidth: 1))
 
-                Label("支持常见照片格式与 GIF 动图。图片只保存在本机，不会上传。", systemImage: "lock.shield")
+                Label("支持常见照片格式与 GIF。图片只保存在本机。皮肤切换后部分页面需返回再进即可完全刷新。", systemImage: "lock.shield")
                     .font(.footnote)
                     .foregroundColor(InkTheme.inkSoft)
                     .padding(.horizontal, 2)
@@ -275,13 +394,33 @@ struct AppearanceSettingsView: View {
         }
     }
 
+    private func skinSwatch(_ skin: ChineseSkin) -> some View {
+        let colors: [Color] = {
+            switch skin {
+            case .ink: return [Color(red: 0.97, green: 0.94, blue: 0.88), Color(red: 0.72, green: 0.18, blue: 0.16), Color(red: 0.22, green: 0.42, blue: 0.35)]
+            case .cyan: return [Color(red: 0.82, green: 0.92, blue: 0.88), Color(red: 0.18, green: 0.48, blue: 0.42), Color(red: 0.25, green: 0.40, blue: 0.50)]
+            case .cinnabar: return [Color(red: 0.98, green: 0.93, blue: 0.85), Color(red: 0.78, green: 0.14, blue: 0.12), Color(red: 0.82, green: 0.62, blue: 0.20)]
+            case .moon: return [Color(red: 0.12, green: 0.14, blue: 0.18), Color(red: 0.82, green: 0.32, blue: 0.28), Color(red: 0.78, green: 0.68, blue: 0.38)]
+            }
+        }()
+        return HStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { i in
+                colors[i]
+            }
+        }
+        .frame(width: 44, height: 44)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.black.opacity(0.08), lineWidth: 0.5))
+    }
+
     private var preview: some View {
         ZStack(alignment: .bottomLeading) {
             AppBackdropView()
-            LinearGradient(colors: [.clear, Color.black.opacity(0.32)], startPoint: .center, endPoint: .bottom)
+            LinearGradient(colors: [.clear, Color.black.opacity(skinRaw == ChineseSkin.moon.rawValue ? 0.45 : 0.28)], startPoint: .center, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 3) {
-                Text("云起山水间").font(.system(size: 21, weight: .semibold, design: .serif))
-                Text(wallpaperFilename.isEmpty ? "水墨宣纸 · 默认主题" : "当前背景预览")
+                Text("云起山水间")
+                    .font(.system(size: 22, weight: .semibold, design: .serif))
+                Text((ChineseSkin(rawValue: skinRaw) ?? .ink).title + " · 主题预览")
                     .font(.caption)
             }
             .foregroundColor(.white)
@@ -290,7 +429,7 @@ struct AppearanceSettingsView: View {
         .frame(height: 210)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(InkTheme.gold.opacity(0.3), lineWidth: 1))
-        .shadow(color: InkTheme.ink.opacity(0.10), radius: 14, y: 6)
+        .shadow(color: Color.black.opacity(0.12), radius: 14, y: 6)
     }
 
     @MainActor
