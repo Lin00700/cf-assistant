@@ -21,7 +21,7 @@ struct ProxyHomeView: View {
                 }
                 Toggle("大陆直连", isOn: $store.bypassCN)
                 Toggle("始终连接", isOn: $store.alwaysOn)
-                NavigationLink("分流规则") { RoutingRulesView() }
+                NavigationLink("分流规则（\(store.routingRules.count)）") { RoutingRulesView() }
                 NavigationLink("流量分类") { TrafficCategoriesView() }
             }
             Section {
@@ -77,7 +77,6 @@ struct ProxyHomeView: View {
     }
 }
 
-/// 独立出来，避免把 ProxyHomeView 的 body 搞复杂触发类型检查超时
 struct TrafficMeterRows: View {
     @ObservedObject private var traffic = VPNTraffic.shared
     @State private var confirmReset = false
@@ -119,12 +118,65 @@ struct NodeEditView: View {
 
 struct RoutingRulesView: View {
     @ObservedObject private var store = ProxyStore.shared
+    @State private var kind: ProxyRoutingRule.Kind = .domainSuffix
+    @State private var value = ""
+    @State private var target: ProxyRoutingRule.Target = .direct
+
     var body: some View {
         List {
-            ForEach(store.routingRules) { r in
-                Text("\(r.value) → \(r.target == .direct ? "直连" : "代理")")
+            if store.routingRules.isEmpty {
+                Text("暂无规则。可添加域名后缀或 IP CIDR。")
+                    .foregroundColor(.secondary)
+                    .font(.footnote)
             }
-            .onDelete { store.routingRules.remove(atOffsets: $0) }
+            ForEach(store.routingRules) { r in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(r.value)
+                        Text(r.kind == .domainSuffix ? "域名后缀" : "IP CIDR")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(r.target == .direct ? "直连" : "代理")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .onDelete { idx in
+                store.routingRules.remove(atOffsets: idx)
+                Task { await VPNManager.shared.restartIfActive(store: store) }
+            }
+
+            Section("添加规则") {
+                Picker("类型", selection: $kind) {
+                    Text("域名后缀").tag(ProxyRoutingRule.Kind.domainSuffix)
+                    Text("IP CIDR").tag(ProxyRoutingRule.Kind.ipCIDR)
+                }
+                TextField(kind == .domainSuffix ? "例如 google.com" : "例如 1.1.1.1/32", text: $value)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Picker("走向", selection: $target) {
+                    Text("直连").tag(ProxyRoutingRule.Target.direct)
+                    Text("代理").tag(ProxyRoutingRule.Target.proxy)
+                }
+                Button("添加") {
+                    let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !v.isEmpty else { return }
+                    store.routingRules.append(
+                        ProxyRoutingRule(kind: kind, value: v, target: target)
+                    )
+                    value = ""
+                    Task { await VPNManager.shared.restartIfActive(store: store) }
+                }
+            }
+
+            Section {
+                Button("应用并重连 VPN") {
+                    Task { await VPNManager.shared.restartIfActive(store: store) }
+                }
+            } footer: {
+                Text("修改规则后若 VPN 已连接会自动重连；也可手动点上面按钮。")
+            }
         }
         .navigationTitle("分流规则")
     }
@@ -132,10 +184,27 @@ struct RoutingRulesView: View {
 
 struct TrafficCategoriesView: View {
     @ObservedObject private var store = ProxyStore.shared
+
     var body: some View {
         List {
-            ForEach(ProxyTrafficCategory.allCases) { c in
-                Text(c.title)
+            Section {
+                ForEach(ProxyTrafficCategory.allCases) { category in
+                    Picker(selection: Binding(
+                        get: { store.policy(for: category) },
+                        set: { newValue in
+                            store.setPolicy(newValue, for: category)
+                            Task { await VPNManager.shared.restartIfActive(store: store) }
+                        }
+                    )) {
+                        ForEach(ProxyGroupPolicy.allCases, id: \.self) { p in
+                            Text(p.title).tag(p)
+                        }
+                    } label: {
+                        Label(category.title, systemImage: category.symbol)
+                    }
+                }
+            } footer: {
+                Text("按软件类型指定走向。默认「跟随节点选择」。修改后会自动重连 VPN。")
             }
         }
         .navigationTitle("流量分类")
