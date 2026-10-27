@@ -62,7 +62,7 @@ struct ProxyHomeView: View {
         .task {
             await vpn.load()
         }
-        .onChange(of: vpn.error) { _, e in
+        .onChange(of: vpn.error) { e in
             error = e
         }
         .alert("出错了", isPresented: Binding(
