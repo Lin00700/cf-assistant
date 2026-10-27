@@ -75,6 +75,7 @@ struct LoginView: View {
 
 struct RootView: View {
     @EnvironmentObject var session: Session
+    @ObservedObject private var theme = ThemeStore.shared
 
     var body: some View {
         TabView {
@@ -100,9 +101,9 @@ struct RootView: View {
         .tint(InkTheme.cinnabar)
         .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
-        .toolbarColorScheme(.light, for: .tabBar)
+        .toolbarColorScheme(InkTheme.chromeScheme, for: .tabBar)
         .background(Color.clear)
-        .id(session.accountId)   // 切换账户时重建所有页面
+        .id("\(session.accountId)-\(theme.skin.rawValue)")
     }
 }
 
