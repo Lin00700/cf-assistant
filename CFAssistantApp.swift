@@ -3,6 +3,11 @@ import SwiftUI
 @main
 struct CFAssistantApp: App {
     @StateObject private var session = Session()
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
+
+    private var skin: ChineseSkin {
+        ChineseSkin(rawValue: skinRaw) ?? .ink
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -16,9 +21,10 @@ struct CFAssistantApp: App {
                     }
                 }
                 .environmentObject(session)
-                .tint(InkTheme.cinnabar)
-                .id(session.accountId)
+                .tint(skin.accent)
+                .id("\(session.accountId)-\(skinRaw)")
             }
+            .preferredColorScheme(skin.isDark ? .dark : .light)
         }
     }
 }

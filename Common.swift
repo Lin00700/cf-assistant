@@ -1,23 +1,86 @@
 import SwiftUI
 
-enum InkTheme {
-    static let cinnabar = Color(red: 0.72, green: 0.18, blue: 0.16)
-    static let cinnabarDeep = Color(red: 0.55, green: 0.11, blue: 0.10)
-    static let ink = Color(red: 0.16, green: 0.13, blue: 0.11)
-    static let inkSoft = Color(red: 0.38, green: 0.32, blue: 0.27)
-    static let gold = Color(red: 0.72, green: 0.55, blue: 0.22)
-    static let pine = Color(red: 0.22, green: 0.42, blue: 0.35)
-    static let paper = Color(red: 0.97, green: 0.94, blue: 0.88)
-    static let paperDeep = Color(red: 0.93, green: 0.87, blue: 0.76)
-    static let seal = Color(red: 0.78, green: 0.16, blue: 0.14)
+/// 中国风皮肤：用 AppStorage 持久化，避免复杂 ThemeStore 链路
+enum ChineseSkin: String, CaseIterable, Identifiable {
+    case ink      // 水墨
+    case cyan     // 青绿
+    case cinnabar // 朱砂
+    case moon     // 月夜
 
-    static var paperGradient: LinearGradient {
-        LinearGradient(colors: [paperDeep.opacity(0.55), paper, Color(.systemBackground)],
-                       startPoint: .top, endPoint: .center)
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ink: return "水墨"
+        case .cyan: return "青绿"
+        case .cinnabar: return "朱砂"
+        case .moon: return "月夜"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .ink: return Color(red: 0.16, green: 0.13, blue: 0.11)
+        case .cyan: return Color(red: 0.18, green: 0.42, blue: 0.40)
+        case .cinnabar: return Color(red: 0.72, green: 0.18, blue: 0.16)
+        case .moon: return Color(red: 0.45, green: 0.52, blue: 0.70)
+        }
+    }
+
+    var paper: Color {
+        switch self {
+        case .ink: return Color(red: 0.97, green: 0.94, blue: 0.88)
+        case .cyan: return Color(red: 0.93, green: 0.96, blue: 0.94)
+        case .cinnabar: return Color(red: 0.98, green: 0.94, blue: 0.90)
+        case .moon: return Color(red: 0.12, green: 0.13, blue: 0.18)
+        }
+    }
+
+    var paperDeep: Color {
+        switch self {
+        case .ink: return Color(red: 0.93, green: 0.87, blue: 0.76)
+        case .cyan: return Color(red: 0.82, green: 0.90, blue: 0.86)
+        case .cinnabar: return Color(red: 0.94, green: 0.85, blue: 0.80)
+        case .moon: return Color(red: 0.08, green: 0.09, blue: 0.14)
+        }
+    }
+
+    var isDark: Bool { self == .moon }
+
+    static var current: ChineseSkin {
+        let raw = UserDefaults.standard.string(forKey: "appearance.chineseSkin") ?? ChineseSkin.ink.rawValue
+        return ChineseSkin(rawValue: raw) ?? .ink
     }
 }
 
-/// 把 client 和 accountId 打包，便于在 async 闭包里使用（避免跨 actor 访问 Session）
+enum InkTheme {
+    static var cinnabar: Color { ChineseSkin.current.accent }
+    static var cinnabarDeep: Color { ChineseSkin.current.accent.opacity(0.85) }
+    static var ink: Color {
+        ChineseSkin.current.isDark
+            ? Color(red: 0.90, green: 0.90, blue: 0.92)
+            : Color(red: 0.16, green: 0.13, blue: 0.11)
+    }
+    static var inkSoft: Color {
+        ChineseSkin.current.isDark
+            ? Color(red: 0.65, green: 0.66, blue: 0.72)
+            : Color(red: 0.38, green: 0.32, blue: 0.27)
+    }
+    static var gold: Color { Color(red: 0.72, green: 0.55, blue: 0.22) }
+    static var pine: Color { Color(red: 0.22, green: 0.42, blue: 0.35) }
+    static var paper: Color { ChineseSkin.current.paper }
+    static var paperDeep: Color { ChineseSkin.current.paperDeep }
+    static var seal: Color { Color(red: 0.78, green: 0.16, blue: 0.14) }
+
+    static var paperGradient: LinearGradient {
+        LinearGradient(
+            colors: [paperDeep.opacity(0.55), paper, Color(.systemBackground)],
+            startPoint: .top,
+            endPoint: .center
+        )
+    }
+}
+
 struct Ctx {
     let c: CFClient
     let acc: String
@@ -27,7 +90,6 @@ extension Session {
     var ctx: Ctx { Ctx(c: client!, acc: accountId) }
 }
 
-/// 通用“加载 → 展示 / 报错重试”容器
 struct LoadView<T, Content: View>: View {
     let load: () async throws -> T
     let content: (T, @escaping () async -> Void) -> Content

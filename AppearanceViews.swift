@@ -1,30 +1,37 @@
 import SwiftUI
 import PhotosUI
 
-// MARK: - 背景装饰
-
 struct AppBackdropView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
     @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
+
+    private var skin: ChineseSkin {
+        ChineseSkin(rawValue: skinRaw) ?? .ink
+    }
 
     var body: some View {
         ZStack {
-            InkTheme.paper.ignoresSafeArea()
+            skin.paper.ignoresSafeArea()
             if let ui = WallpaperStore.load(filename: wallpaperFilename) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFill()
                     .ignoresSafeArea()
-                Color.white.opacity(wallpaperWash).ignoresSafeArea()
+                Color(skin.isDark ? .black : .white).opacity(wallpaperWash).ignoresSafeArea()
             } else {
-                InkTheme.paperGradient.ignoresSafeArea()
+                LinearGradient(
+                    colors: [skin.paperDeep.opacity(0.7), skin.paper, Color(.systemBackground)],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+                .ignoresSafeArea()
             }
         }
         .allowsHitTesting(false)
+        .id(skinRaw)
     }
 }
-
-// MARK: - 壁纸存储
 
 enum WallpaperStore {
     private static var dir: URL {
@@ -60,17 +67,44 @@ enum WallpaperStore {
     }
 }
 
-// MARK: - 设置页
-
 struct AppearanceSettingsView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
     @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
     @State private var pickerItem: PhotosPickerItem?
     @State private var error: String?
 
+    private var skin: ChineseSkin {
+        ChineseSkin(rawValue: skinRaw) ?? .ink
+    }
+
     var body: some View {
         List {
-            Section(footer: Text("自定义壁纸会显示在所有页面背后。滑动下方滑块可调节遮罩深浅。")) {
+            Section("中国风主题") {
+                ForEach(ChineseSkin.allCases) { s in
+                    Button {
+                        skinRaw = s.rawValue
+                    } label: {
+                        HStack(spacing: 12) {
+                            Circle()
+                                .fill(s.accent)
+                                .frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.primary.opacity(0.15), lineWidth: 1))
+                            Text(s.title)
+                                .foregroundColor(.primary)
+                            Spacer()
+                            if skinRaw == s.rawValue {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(s.accent)
+                            }
+                        }
+                    }
+                }
+            } footer: {
+                Text("水墨 · 青绿 · 朱砂 · 月夜。切换后全局强调色与背景会更新。")
+            }
+
+            Section(footer: Text("自定义壁纸会显示在所有页面背后。")) {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Label(wallpaperFilename.isEmpty ? "从相册选择壁纸" : "更换壁纸", systemImage: "photo.on.rectangle")
                 }
@@ -88,11 +122,6 @@ struct AppearanceSettingsView: View {
                     Slider(value: $wallpaperWash, in: 0.2...0.9, step: 0.02)
                 }
             }
-            Section {
-                Text("水墨配色会用于按钮与导航栏强调色。")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-            }
         }
         .navigationTitle("背景与主题")
         .onChange(of: pickerItem) { item in
@@ -109,8 +138,8 @@ struct AppearanceSettingsView: View {
                 error = "无法读取图片"
                 return
             }
-            if let old = wallpaperFilename.isEmpty ? nil : wallpaperFilename {
-                WallpaperStore.delete(filename: old)
+            if !wallpaperFilename.isEmpty {
+                WallpaperStore.delete(filename: wallpaperFilename)
             }
             guard let name = WallpaperStore.save(img) else {
                 error = "保存失败"

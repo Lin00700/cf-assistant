@@ -73,6 +73,11 @@ struct LoginView: View {
 
 struct RootView: View {
     @EnvironmentObject var session: Session
+    @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
+
+    private var skin: ChineseSkin {
+        ChineseSkin(rawValue: skinRaw) ?? .ink
+    }
 
     var body: some View {
         TabView {
@@ -95,11 +100,11 @@ struct RootView: View {
                 .chineseNavigationChrome()
                 .tabItem { Label("设置", systemImage: "gearshape.fill") }
         }
-        .tint(InkTheme.cinnabar)
-        .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
+        .tint(skin.accent)
+        .toolbarBackground(skin.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
-        .toolbarColorScheme(.light, for: .tabBar)
-        .id(session.accountId)
+        .toolbarColorScheme(skin.isDark ? .dark : .light, for: .tabBar)
+        .id("\(session.accountId)-\(skinRaw)")
     }
 }
 
@@ -158,6 +163,6 @@ extension View {
         self
             .toolbarBackground(InkTheme.paper.opacity(0.96), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(.light, for: .navigationBar)
+            .toolbarColorScheme(ChineseSkin.current.isDark ? .dark : .light, for: .navigationBar)
     }
 }
