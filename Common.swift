@@ -29,9 +29,10 @@ enum ChineseSkin: String, CaseIterable, Identifiable {
 }
 
 enum InkTheme {
-    /// 始终读 ThemeStore，配合界面 .id(theme.skin) 可立即换肤
+    /// 从 UserDefaults 读皮肤，避免 Swift 6 跨隔离访问 ThemeStore.shared
     static var currentSkin: ChineseSkin {
-        ThemeStore.shared.skin
+        let raw = UserDefaults.standard.string(forKey: "appearance.chineseSkin") ?? ChineseSkin.ink.rawValue
+        return ChineseSkin(rawValue: raw) ?? .ink
     }
 
     private static var skin: ChineseSkin { currentSkin }
