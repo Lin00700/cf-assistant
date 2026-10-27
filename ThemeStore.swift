@@ -1,15 +1,10 @@
 import SwiftUI
 import Combine
 
-/// 全局主题状态（不标 @MainActor，避免 Swift 6 静态初始化隔离错误）
 final class ThemeStore: ObservableObject {
     static let shared = ThemeStore()
 
-    @Published var skin: ChineseSkin {
-        didSet {
-            UserDefaults.standard.set(skin.rawValue, forKey: Self.storageKey)
-        }
-    }
+    @Published var skin: ChineseSkin
 
     private static let storageKey = "appearance.chineseSkin"
 
@@ -18,7 +13,6 @@ final class ThemeStore: ObservableObject {
         skin = ChineseSkin(rawValue: raw) ?? .ink
     }
 
-    @MainActor
     func setSkin(_ new: ChineseSkin) {
         skin = new
         UserDefaults.standard.set(new.rawValue, forKey: Self.storageKey)

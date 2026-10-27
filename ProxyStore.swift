@@ -51,10 +51,13 @@ final class ProxyStore: ObservableObject {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
             nodes = arr
         }
-        if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
+        if let s = UserDefaults.standard.string(forKey: "vpn_selected") {
+            selectedID = UUID(uuidString: s)
+        }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
         alwaysOn = UserDefaults.standard.bool(forKey: "vpn_always_on")
-        if let raw = UserDefaults.standard.string(forKey: "vpn_mode"), let m = ProxySelectionMode(rawValue: raw) {
+        if let raw = UserDefaults.standard.string(forKey: "vpn_mode"),
+           let m = ProxySelectionMode(rawValue: raw) {
             selectionMode = m
         }
         if let d = UserDefaults.standard.data(forKey: Self.rulesKey),
@@ -65,7 +68,8 @@ final class ProxyStore: ObservableObject {
            let raw = try? JSONDecoder().decode([String: String].self, from: d) {
             var map: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]
             for (k, v) in raw {
-                if let c = ProxyTrafficCategory(rawValue: k), let p = ProxyGroupPolicy(rawValue: v) {
+                if let c = ProxyTrafficCategory(rawValue: k),
+                   let p = ProxyGroupPolicy(rawValue: v) {
                     map[c] = p
                 }
             }
@@ -86,20 +90,30 @@ final class ProxyStore: ObservableObject {
         }
     }
 
-    var selected: ProxyNode? { nodes.first { $0.id == selectedID } ?? nodes.first }
+    var selected: ProxyNode? {
+        nodes.first { $0.id == selectedID } ?? nodes.first
+    }
 
     private func save() {
-        if let d = try? JSONEncoder().encode(nodes) { Keychain.set(d, key: Self.key) }
+        if let d = try? JSONEncoder().encode(nodes) {
+            Keychain.set(d, key: Self.key)
+        }
     }
 
     private func saveRules() {
-        if let d = try? JSONEncoder().encode(routingRules) { UserDefaults.standard.set(d, forKey: Self.rulesKey) }
+        if let d = try? JSONEncoder().encode(routingRules) {
+            UserDefaults.standard.set(d, forKey: Self.rulesKey)
+        }
     }
 
     private func saveCategoryPolicies() {
         var raw: [String: String] = [:]
-        for (c, p) in categoryPolicies { raw[c.rawValue] = p.rawValue }
-        if let d = try? JSONEncoder().encode(raw) { UserDefaults.standard.set(d, forKey: Self.categoryKey) }
+        for (c, p) in categoryPolicies {
+            raw[c.rawValue] = p.rawValue
+        }
+        if let d = try? JSONEncoder().encode(raw) {
+            UserDefaults.standard.set(d, forKey: Self.categoryKey)
+        }
     }
 
     func policy(for category: ProxyTrafficCategory) -> ProxyGroupPolicy {
@@ -118,21 +132,29 @@ final class ProxyStore: ObservableObject {
 
     func add(_ node: ProxyNode, select: Bool = false) {
         nodes.append(node)
-        if select || selectedID == nil { selectedID = node.id }
+        if select || selectedID == nil {
+            selectedID = node.id
+        }
     }
 
     func add(_ list: [ProxyNode]) {
-        for n in list { add(n) }
+        for n in list {
+            add(n)
+        }
     }
 
     func update(_ node: ProxyNode) {
-        if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
+        if let i = nodes.firstIndex(where: { $0.id == node.id }) {
+            nodes[i] = node
+        }
     }
 
     func remove(_ node: ProxyNode) {
         nodes.removeAll { $0.id == node.id }
         results[node.id] = nil
-        if selectedID == node.id { selectedID = nodes.first?.id }
+        if selectedID == node.id {
+            selectedID = nodes.first?.id
+        }
     }
 
     func removeAll() {
@@ -149,11 +171,16 @@ final class ProxyStore: ObservableObject {
         if vpnConnected {
             let usable = nodes.filter(SingBoxConfig.isSupported)
             do {
-                results = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+                results = try await ProxyLatencyTester.measureViaSingBox(
+                    nodes: usable,
+                    controlURL: SingBoxConfig.controlURL
+                )
             } catch {
                 refreshError = error.localizedDescription
                 var failed: [UUID: ProxyProbeResult] = [:]
-                for n in nodes { failed[n.id] = .probeFailed }
+                for n in nodes {
+                    failed[n.id] = .probeFailed
+                }
                 results = failed
             }
         } else {
@@ -168,8 +195,20 @@ enum NodeWorker {
     }
 
     static func node(name: String, host: String, address: String, uuid: String) -> ProxyNode {
-        ProxyNode(name: name, proto: "vless", server: address, port: 443, secret: uuid,
-                  params: ["type": "ws", "security": "tls", "sni": host, "host": host,
-                           "path": "/", "fp": "chrome"])
+        ProxyNode(
+            name: name,
+            proto: "vless",
+            server: address,
+            port: 443,
+            secret: uuid,
+            params: [
+                "type": "ws",
+                "security": "tls",
+                "sni": host,
+                "host": host,
+                "path": "/",
+                "fp": "chrome"
+            ]
+        )
     }
 }
