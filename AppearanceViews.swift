@@ -12,20 +12,13 @@ struct AppBackdropView: View {
 
     var body: some View {
         ZStack {
-            skin.paper.ignoresSafeArea()
+            InkWashBackground()
             if let ui = WallpaperStore.load(filename: wallpaperFilename) {
                 Image(uiImage: ui)
                     .resizable()
                     .scaledToFill()
                     .ignoresSafeArea()
                 Color(skin.isDark ? .black : .white).opacity(wallpaperWash).ignoresSafeArea()
-            } else {
-                LinearGradient(
-                    colors: [skin.paperDeep.opacity(0.7), skin.paper, Color(.systemBackground)],
-                    startPoint: .top,
-                    endPoint: .center
-                )
-                .ignoresSafeArea()
             }
         }
         .allowsHitTesting(false)
@@ -99,7 +92,7 @@ struct AppearanceSettingsView: View {
             } header: {
                 Text("中国风主题")
             } footer: {
-                Text("水墨 · 青绿 · 朱砂 · 月夜。切换后全局强调色与背景会更新。")
+                Text("水墨跟随系统深色模式，米纸和墨色都会保持可读。墨夜固定为深色。强调色是朱砂红。青绿、朱砂、月夜仍然可用。")
             }
 
             Section(footer: Text("自定义壁纸会显示在所有页面背后。")) {

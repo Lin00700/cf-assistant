@@ -79,6 +79,7 @@ struct WorkersView: View {
     @EnvironmentObject var session: Session
     @State private var error: String?
     @State private var creating = false
+    @State private var showAnalytics = false
 
     var body: some View {
         let ctx = session.ctx
@@ -132,10 +133,14 @@ struct WorkersView: View {
         }
         .navigationTitle("Workers")
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button("分析") { showAnalytics = true }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button { creating = true } label: { Image(systemName: "plus") }
             }
         }
+        .navigationDestination(isPresented: $showAnalytics) { WorkersAnalyticsView() }
         .errorAlert($error)
     }
 }

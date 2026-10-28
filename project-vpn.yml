@@ -11,6 +11,7 @@ targets:
       - path: .
         includes: ["*.swift"]
         excludes: ["PacketTunnelProvider.swift", "CFControl/**"]
+      - path: Assets.xcassets
     entitlements:
       path: CFAssistant.entitlements
       properties:
@@ -31,8 +32,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios
         PRODUCT_NAME: CFAssistant
         SWIFT_VERSION: "5.9"
-        MARKETING_VERSION: "1.1.0"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: "CF助手"
@@ -58,8 +59,8 @@ targets:
       properties:
         CFBundleDisplayName: CF助手 VPN
         NSLocalNetworkUsageDescription: "连接诊断会测试您输入的局域网 IP 和端口，仅用于测量 TCP 连通性。"
-        CFBundleShortVersionString: "1.1.0"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "3"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
@@ -85,8 +86,8 @@ targets:
       path: CFControl-Info.plist
       properties:
         CFBundleDisplayName: 云朵
-        CFBundleShortVersionString: "1.1.0"
-        CFBundleVersion: "2"
+        CFBundleShortVersionString: "1.2.0"
+        CFBundleVersion: "3"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

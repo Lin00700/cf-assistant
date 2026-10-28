@@ -1,7 +1,13 @@
 name: Build IPA with VPN
 
 on:
+  push:
+    branches: [ main, 'cursor/**' ]
   workflow_dispatch:
+
+concurrency:
+  group: ipa-vpn-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

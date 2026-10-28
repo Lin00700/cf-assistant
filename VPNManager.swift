@@ -78,6 +78,22 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// 扩展进程的物理内存占用。未连接或旧扩展不认识 "mem" 时返回 nil。
+    func fetchMemory() async -> Int64? {
+        guard isConnected, let session = manager?.connection as? NETunnelProviderSession else { return nil }
+        return await withCheckedContinuation { cont in
+            do {
+                try session.sendProviderMessage(Data("mem".utf8)) { data in
+                    let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    cont.resume(returning: Int64(trimmed))
+                }
+            } catch {
+                cont.resume(returning: nil)
+            }
+        }
+    }
+
     func fetchLog() async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"

@@ -154,6 +154,7 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header(accountName)
                 statCards
+                HomeShortcutGrid()
                 if !m.badTunnels.isEmpty { alertSection }
                 usageSection
                 domainsSection
@@ -161,9 +162,26 @@ struct OverviewView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(AppBackdropView())
+        .background(Color.clear)
         .overlay { if !m.loaded { ProgressView() } }
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle("首页")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    ForEach(session.accounts) { account in
+                        Button { session.selectAccount(account.id) } label: {
+                            if account.id == session.accountId {
+                                Label(account.name, systemImage: "checkmark")
+                            } else {
+                                Text(account.name)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "person.crop.circle")
+                }
+            }
+        }
         .task(id: ctx.acc) { await m.load(ctx) }
         .refreshable { await m.load(ctx) }
         .sheet(isPresented: $showLimits) { LimitsEditor() }
@@ -172,13 +190,16 @@ struct OverviewView: View {
     // MARK: 头部
 
     private func header(_ accountName: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(Self.dateText).font(.subheadline).foregroundColor(.secondary)
-            Text("\(Self.greeting)，\(accountName)")
-                .font(.system(.title2, design: .serif).bold()).lineLimit(2)
-            Text(zoneSummary).font(.subheadline).foregroundColor(.secondary)
+        InkBanner(height: 168) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.dateText).font(.subheadline).foregroundColor(InkTheme.inkSoft)
+                Text("\(Self.greeting)，\(accountName)")
+                    .font(.custom("SongtiSC-Bold", size: 28, relativeTo: .title2))
+                    .foregroundColor(InkTheme.ink)
+                    .lineLimit(2)
+                Text(zoneSummary).font(.subheadline).foregroundColor(InkTheme.inkSoft)
+            }
         }
-        .padding(.top, 8)
     }
 
     private var zoneSummary: String {
@@ -337,7 +358,7 @@ struct StatCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.subheadline).foregroundColor(InkTheme.inkSoft)
-            Text("\(value)").font(.system(size: 34, weight: .bold, design: .serif)).foregroundColor(InkTheme.ink)
+            Text("\(value)").font(.system(.largeTitle, design: .serif)).foregroundColor(InkTheme.ink)
             Text(caption).font(.caption).foregroundColor(InkTheme.inkSoft)
         }
         .cardStyle()
