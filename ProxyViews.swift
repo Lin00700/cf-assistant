@@ -86,25 +86,45 @@ struct ProxyNodeSections: View {
     @ObservedObject private var vpn = VPNManager.shared
     @State private var editing: ProxyNode?
 
+    /// Main's protocol order: vless, vmess, trojan, ss, hysteria2.
+    /// Any other proto the nodes actually use (TUIC, aliases, …) is appended.
+    /// A group is omitted when it has no nodes.
+    private static let knownOrder = ["vless", "vmess", "trojan", "ss", "hysteria2"]
+
+    private func canonical(_ proto: String) -> String {
+        switch proto.lowercased() {
+        case "ss", "shadowsocks": return "ss"
+        case "hy2", "hysteria2": return "hysteria2"
+        default: return proto.lowercased()
+        }
+    }
+
     private var protocols: [String] {
-        var seen: [String] = []
-        for node in store.nodes where !seen.contains(node.proto) { seen.append(node.proto) }
-        return seen
+        let present = Set(store.nodes.map { canonical($0.proto) })
+        var ordered = Self.knownOrder.filter { present.contains($0) }
+        var seen = Set(ordered)
+        for node in store.nodes {
+            let key = canonical(node.proto)
+            if seen.insert(key).inserted { ordered.append(key) }
+        }
+        return ordered
     }
 
     private func title(_ proto: String) -> String {
-        switch proto {
+        switch canonical(proto) {
         case "ss": return "Shadowsocks"
         case "vless": return "VLESS"
         case "vmess": return "VMess"
         case "trojan": return "Trojan"
         case "hysteria2": return "Hysteria2"
+        case "tuic": return "TUIC"
         default: return proto.uppercased()
         }
     }
 
     private func nodes(of proto: String) -> [ProxyNode] {
-        store.nodes.filter { $0.proto == proto }
+        let key = canonical(proto)
+        return store.nodes.filter { canonical($0.proto) == key }
     }
 
     var body: some View {
