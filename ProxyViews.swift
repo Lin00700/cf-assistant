@@ -4,6 +4,11 @@ struct ProxyHomeView: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
     @State private var error: String?
+    @State private var selecting = false
+    @State private var checked = Set<UUID>()
+    @State private var pendingIDs: [UUID] = []
+    @State private var confirmDelete = false
+    @State private var confirmAll = false
 
     var body: some View {
         List {
@@ -28,9 +33,72 @@ struct ProxyHomeView: View {
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
             }
-            ProxyNodeSections()
+            ProxyNodeSections(selecting: $selecting, checked: $checked) { ids in
+                pendingIDs = Array(ids)
+                confirmDelete = true
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if selecting {
+                Button {
+                    pendingIDs = Array(checked)
+                    confirmDelete = true
+                } label: {
+                    Text("删除所选 (\(checked.count))")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(InkTheme.seal)
+                .disabled(checked.isEmpty)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
         }
         .navigationTitle("VPN 与节点")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Menu {
+                    Button("全部删除", role: .destructive) { confirmAll = true }
+                        .disabled(store.nodes.isEmpty)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(selecting ? "完成" : "选择") {
+                    selecting.toggle()
+                    if !selecting { checked.removeAll() }
+                }
+                .disabled(store.nodes.isEmpty && !selecting)
+            }
+        }
+        .confirmationDialog(
+            "删除 \(pendingIDs.count) 个节点？",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
+            Button("删除 \(pendingIDs.count) 个", role: .destructive) {
+                applyDelete(Set(pendingIDs))
+            }
+            Button("取消", role: .cancel) { pendingIDs = [] }
+        } message: {
+            Text("删除后会立刻更新本机保存的节点。若包含当前连接的节点，将改用剩余的第一个；一个都不剩就断开 VPN。")
+        }
+        .confirmationDialog(
+            "删除全部 \(store.nodes.count) 个节点？",
+            isPresented: $confirmAll,
+            titleVisibility: .visible
+        ) {
+            Button("全部删除", role: .destructive) {
+                applyDelete(Set(store.nodes.map(\.id)))
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("列表里的节点都会删掉，并断开 VPN。")
+        }
         .task {
             await vpn.load()
             await store.refreshLatency(vpnConnected: vpn.isConnected)
@@ -45,6 +113,19 @@ struct ProxyHomeView: View {
             Button("好") { error = nil }
         } message: {
             Text(error ?? "")
+        }
+    }
+
+    private func applyDelete(_ ids: Set<UUID>) {
+        let hitActive = store.removeIDs(ids)
+        checked.subtract(ids)
+        pendingIDs = []
+        if store.nodes.isEmpty {
+            selecting = false
+            checked.removeAll()
+            Task { await vpn.set(on: false, store: store) }
+        } else if hitActive {
+            Task { await vpn.restartIfActive(store: store) }
         }
     }
 }
@@ -84,6 +165,9 @@ struct TrafficMeterRows: View {
 struct ProxyNodeSections: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
+    @Binding var selecting: Bool
+    @Binding var checked: Set<UUID>
+    var askDelete: (Set<UUID>) -> Void
     @State private var editing: ProxyNode?
 
     /// Main's protocol order: vless, vmess, trojan, ss, hysteria2.
@@ -140,28 +224,49 @@ struct ProxyNodeSections: View {
                     }
                 }
             } footer: {
-                Text("未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑节点可编辑。")
+                Text("未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑编辑，右滑删除。")
             }
             ForEach(protocols, id: \.self) { proto in
-                Section(header: Text("\(title(proto))（\(nodes(of: proto).count)）")) {
-                    ForEach(nodes(of: proto)) { node in
+                let group = nodes(of: proto)
+                let groupIDs = Set(group.map(\.id))
+                let groupAll = !groupIDs.isEmpty && groupIDs.isSubset(of: checked)
+                Section {
+                    if selecting {
+                        Button(groupAll ? "取消全选本组" : "全选本组") {
+                            if groupAll {
+                                checked.subtract(groupIDs)
+                            } else {
+                                checked.formUnion(groupIDs)
+                            }
+                        }
+                    }
+                    ForEach(group) { node in
                         ProxyNodeLatencyRow(
                             node: node,
-                            selected: store.selectedID == node.id,
+                            active: store.selectedID == node.id,
+                            marked: checked.contains(node.id),
+                            choosing: selecting,
                             result: store.results[node.id]
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            store.selectedID = node.id
-                            Task { await vpn.restartIfActive(store: store) }
+                            if selecting {
+                                if checked.contains(node.id) { checked.remove(node.id) }
+                                else { checked.insert(node.id) }
+                            } else {
+                                store.selectedID = node.id
+                                Task { await vpn.restartIfActive(store: store) }
+                            }
                         }
                         .swipeActions(edge: .leading) {
                             Button("编辑") { editing = node }
                         }
                         .swipeActions {
-                            Button("删除", role: .destructive) { store.remove(node) }
+                            Button("删除", role: .destructive) { askDelete([node.id]) }
                         }
                     }
+                } header: {
+                    Text("\(title(proto))（\(group.count)）")
                 }
             }
             Section("添加节点") {
@@ -181,11 +286,17 @@ struct ProxyNodeSections: View {
 
 struct ProxyNodeLatencyRow: View {
     let node: ProxyNode
-    let selected: Bool
+    let active: Bool
+    let marked: Bool
+    let choosing: Bool
     let result: ProxyProbeResult?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
+            if choosing {
+                Image(systemName: marked ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(marked ? InkTheme.seal : .secondary)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.name)
                 Text(node.detail).font(.caption2).foregroundColor(.secondary)
@@ -196,7 +307,7 @@ struct ProxyNodeLatencyRow: View {
                     .font(.caption.monospacedDigit())
                     .foregroundColor(Self.tint(result))
             }
-            if selected {
+            if active && !choosing {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(Color(red: 0.15, green: 0.55, blue: 0.28))
             }

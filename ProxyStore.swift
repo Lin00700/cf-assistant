@@ -99,9 +99,18 @@ final class ProxyStore: ObservableObject {
     }
 
     func remove(_ node: ProxyNode) {
-        nodes.removeAll { $0.id == node.id }
-        results[node.id] = nil
-        if selectedID == node.id { selectedID = nodes.first?.id }
+        _ = removeIDs([node.id])
+    }
+
+    /// 删掉这批节点并写回持久化。返回值表示当前选中节点被删掉了。
+    @discardableResult
+    func removeIDs(_ ids: Set<UUID>) -> Bool {
+        let hitActive = selectedID.map { ids.contains($0) } ?? false
+        guard !ids.isEmpty else { return false }
+        nodes.removeAll { ids.contains($0.id) }
+        for id in ids { results[id] = nil }
+        if hitActive { selectedID = nodes.first?.id }
+        return hitActive
     }
 
     func removeAll() {
