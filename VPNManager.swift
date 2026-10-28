@@ -25,12 +25,23 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// Packet tunnel id. Re-signers rewrite the host id (for example com.cfassistant.ios123);
+    /// the tunnel is always that id plus ".tunnel". Never return CFControl — it is a widget,
+    /// and pointing NE at it makes the VPN start and immediately drop.
     var extensionBundleID: String? {
+        guard let host = Bundle.main.bundleIdentifier, !host.isEmpty else { return nil }
+        let derived = host + ".tunnel"
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return nil }
-        for u in items where u.pathExtension == "appex" {
-            if let id = Bundle(url: u)?.bundleIdentifier { return id }
+        let appexes = items.filter { $0.pathExtension == "appex" }
+        if appexes.contains(where: { $0.lastPathComponent == "CFTunnel.appex" }) {
+            return derived
+        }
+        for url in appexes {
+            if let id = Bundle(url: url)?.bundleIdentifier, id == derived || id.hasSuffix(".tunnel") {
+                return id
+            }
         }
         return nil
     }

@@ -28,40 +28,12 @@ struct ProxyHomeView: View {
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
             }
-            Section("节点") {
-                Button("刷新延迟") {
-                    Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
-                }
-                ForEach(store.nodes) { n in
-                    Button {
-                        store.selectedID = n.id
-                        Task { await vpn.restartIfActive(store: store) }
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(n.name)
-                                Text(n.detail).font(.caption2).foregroundColor(.secondary)
-                            }
-                            Spacer()
-                            if store.selectedID == n.id {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                }
-                .onDelete { offsets in
-                    for i in offsets.sorted(by: >) {
-                        store.remove(store.nodes[i])
-                    }
-                }
-            }
-            Section {
-                NavigationLink("导入节点") { ImportNodesView() }
-            }
+            ProxyNodeSections()
         }
         .navigationTitle("VPN 与节点")
         .task {
             await vpn.load()
+            await store.refreshLatency(vpnConnected: vpn.isConnected)
         }
         .onChange(of: vpn.error) { e in
             error = e
@@ -109,10 +81,176 @@ struct TrafficMeterRows: View {
     }
 }
 
-struct NodeEditView: View {
-    let node: ProxyNode
+struct ProxyNodeSections: View {
+    @ObservedObject private var store = ProxyStore.shared
+    @ObservedObject private var vpn = VPNManager.shared
+    @State private var editing: ProxyNode?
+
+    private var protocols: [String] {
+        var seen: [String] = []
+        for node in store.nodes where !seen.contains(node.proto) { seen.append(node.proto) }
+        return seen
+    }
+
+    private func title(_ proto: String) -> String {
+        switch proto {
+        case "ss": return "Shadowsocks"
+        case "vless": return "VLESS"
+        case "vmess": return "VMess"
+        case "trojan": return "Trojan"
+        case "hysteria2": return "Hysteria2"
+        default: return proto.uppercased()
+        }
+    }
+
+    private func nodes(of proto: String) -> [ProxyNode] {
+        store.nodes.filter { $0.proto == proto }
+    }
+
     var body: some View {
-        Text(node.name)
+        Group {
+            Section {
+                Button {
+                    Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
+                } label: {
+                    if store.isRefreshing {
+                        HStack { ProgressView(); Text("正在测试 TCP…") }
+                    } else {
+                        Text("刷新延迟")
+                    }
+                }
+            } footer: {
+                Text(vpn.isConnected
+                     ? "VPN 已连接时通过代理探测真实延迟。"
+                     : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑节点可编辑。")
+            }
+            ForEach(protocols, id: \.self) { proto in
+                Section(header: Text("\(title(proto))（\(nodes(of: proto).count)）")) {
+                    ForEach(nodes(of: proto)) { node in
+                        ProxyNodeLatencyRow(
+                            node: node,
+                            selected: store.selectedID == node.id,
+                            result: store.results[node.id]
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            store.selectedID = node.id
+                            Task { await vpn.restartIfActive(store: store) }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button("编辑") { editing = node }
+                        }
+                        .swipeActions {
+                            Button("删除", role: .destructive) { store.remove(node) }
+                        }
+                    }
+                }
+            }
+            Section("添加节点") {
+                NavigationLink { ImportNodesView() } label: {
+                    Label("从链接 / 订阅导入", systemImage: "link")
+                }
+                NavigationLink { NodeDeployView() } label: {
+                    Label("部署 Cloudflare Worker 节点", systemImage: "cloud")
+                }
+            }
+        }
+        .sheet(item: $editing) { node in
+            NodeEditView(node: node)
+        }
+    }
+}
+
+struct ProxyNodeLatencyRow: View {
+    let node: ProxyNode
+    let selected: Bool
+    let result: ProxyProbeResult?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(node.name)
+                Text(node.detail).font(.caption2).foregroundColor(.secondary)
+            }
+            Spacer()
+            if let result {
+                Text(result.label)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(Self.tint(result))
+            }
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(Color(red: 0.15, green: 0.55, blue: 0.28))
+            }
+        }
+    }
+
+    static func tint(_ result: ProxyProbeResult) -> Color {
+        switch result {
+        case .latency(let ms), .tcpLatency(let ms):
+            return ms < 300 ? Color(red: 0.15, green: 0.55, blue: 0.28) : Color.orange
+        case .unreachable, .probeFailed:
+            return Color(red: 0.86, green: 0.38, blue: 0.12)
+        case .requiresVPN:
+            return .secondary
+        }
+    }
+}
+
+struct NodeEditView: View {
+    @ObservedObject private var store = ProxyStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var node: ProxyNode
+    @State private var portText: String
+
+    init(node: ProxyNode) {
+        _node = State(initialValue: node)
+        _portText = State(initialValue: String(node.port))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("基本") {
+                    TextField("名称", text: $node.name)
+                    TextField("地址（域名或 IP）", text: $node.server)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("端口", text: $portText).keyboardType(.numberPad)
+                    TextField(node.proto == "vless" || node.proto == "vmess" ? "UUID" : "密码", text: $node.secret)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if node.proto == "ss" {
+                        Picker("加密方式", selection: Binding(
+                            get: { node.params["method"] ?? "aes-128-gcm" },
+                            set: { node.params["method"] = $0 }
+                        )) {
+                            Text("aes-128-gcm").tag("aes-128-gcm")
+                            Text("aes-256-gcm").tag("aes-256-gcm")
+                            Text("chacha20-ietf-poly1305").tag("chacha20-ietf-poly1305")
+                            Text("2022-blake3-aes-128-gcm").tag("2022-blake3-aes-128-gcm")
+                            Text("2022-blake3-aes-256-gcm").tag("2022-blake3-aes-256-gcm")
+                        }
+                    }
+                }
+                Section(footer: Text("加密方式必须与服务器一致。")) {
+                    Text(node.detail).font(.footnote).foregroundColor(.secondary)
+                }
+            }
+            .navigationTitle("编辑节点")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        var next = node
+                        next.port = Int(portText) ?? next.port
+                        next.raw = ""
+                        store.update(next)
+                        Task { await VPNManager.shared.restartIfActive(store: store) }
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -261,5 +399,32 @@ struct VPNLogView: View {
 }
 
 struct NodeDeployView: View {
-    var body: some View { Text("部署").padding() }
+    @ObservedObject private var store = ProxyStore.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = "cf-vless"
+    @State private var uuid = UUID().uuidString
+    @State private var address = ""
+
+    var body: some View {
+        Form {
+            Section(footer: Text("生成 VLESS + WebSocket 节点并加入列表。Worker 脚本仍需部署到 Cloudflare。")) {
+                TextField("名称", text: $name)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("UUID", text: $uuid)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("连接地址（workers.dev 或优选 IP）", text: $address)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            Section {
+                Button("加入节点") {
+                    let host = address.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty, !uuid.isEmpty, !host.isEmpty else { return }
+                    store.add(NodeWorker.node(name: name, host: host, address: host, uuid: uuid), select: true)
+                    dismiss()
+                }
+                .disabled(name.isEmpty || uuid.isEmpty || address.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .navigationTitle("部署 Worker 节点")
+    }
 }
