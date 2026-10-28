@@ -69,6 +69,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios.tunnel
         PRODUCT_NAME: CFTunnel
         SWIFT_VERSION: "5.9"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"
         OTHER_LDFLAGS: ["-lresolv"]
         SKIP_INSTALL: YES
@@ -95,6 +97,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios.control
         PRODUCT_NAME: CFControl
         SWIFT_VERSION: "5.9"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "3"
+        INFOPLIST_KEY_CFBundleShortVersionString: "1.2.0"
+        INFOPLIST_KEY_CFBundleVersion: "3"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
