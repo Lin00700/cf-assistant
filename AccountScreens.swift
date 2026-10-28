@@ -513,10 +513,14 @@ struct WorkersAnalyticsView: View {
         let vars = ["acc": ctx.acc, "start": iso.string(from: start), "end": iso.string(from: now)]
         do {
             stats = try await query(ctx, vars, withErrors: true)
-            error = nil
+            self.error = nil
         } catch {
-            do { stats = try await query(ctx, vars, withErrors: false); error = nil }
-            catch { self.error = error.localizedDescription }
+            do {
+                stats = try await query(ctx, vars, withErrors: false)
+                self.error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
         }
         loaded = true
     }

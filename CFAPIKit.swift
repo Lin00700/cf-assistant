@@ -15,7 +15,6 @@ extension JSONValue {
         }
     }
     var bool: Bool? { if case .bool(let b) = self { return b }; return nil }
-    var object: [String: JSONValue] { if case .object(let o) = self { return o }; return [:] }
     var isNull: Bool { if case .null = self { return true }; return false }
 }
 

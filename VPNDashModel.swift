@@ -218,8 +218,10 @@ final class VPNDashModel: ObservableObject {
         for ip in needed where seen.insert(ip).inserted {
             if budget == 0 { break }
             budget -= 1
-            let primary = await GeoClient.lookup(ip, provider: .ipwho)
-            let fix = primary ?? await GeoClient.lookup(ip, provider: .ipsb)
+            var fix = await GeoClient.lookup(ip, provider: .ipwho)
+            if fix == nil {
+                fix = await GeoClient.lookup(ip, provider: .ipsb)
+            }
             cache[ip] = GeoSlot(fix: fix)
         }
         conns = fresh
