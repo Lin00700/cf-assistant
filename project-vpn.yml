@@ -15,7 +15,18 @@ targets:
     entitlements:
       path: CFAssistant.entitlements
       properties:
-        com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+        # Match the working 1.1.0 IPA. dns-settings is what lets the tunnel publish
+        # NEDNSSettings; without it the system still hijacks DNS and queries time out.
+        com.apple.developer.networking.networkextension:
+          - app-proxy-provider
+          - content-filter-provider
+          - packet-tunnel-provider
+          - dns-proxy
+          - dns-settings
+          - relay
+          - url-filter-provider
+          - hotspot-provider
+        com.apple.developer.networking.vpn.api: [allow-vpn]
     dependencies:
       - target: CFTunnel
         embed: true
@@ -49,7 +60,16 @@ targets:
     entitlements:
       path: CFTunnel.entitlements
       properties:
-        com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+        com.apple.developer.networking.networkextension:
+          - app-proxy-provider
+          - content-filter-provider
+          - packet-tunnel-provider
+          - dns-proxy
+          - dns-settings
+          - relay
+          - url-filter-provider
+          - hotspot-provider
+        com.apple.developer.networking.vpn.api: [allow-vpn]
     dependencies:
       - framework: Libbox.xcframework
         embed: false
