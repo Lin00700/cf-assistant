@@ -7,14 +7,14 @@ import Libbox
 enum TunnelFootprint {
     static func bytes() -> UInt64 {
         var info = task_vm_info_data_t()
-        let words = Int(TASK_VM_INFO_COUNT)
-        var count = mach_msg_type_number_t(words)
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let words = Int(count)
         let result = withUnsafeMutablePointer(to: &info) { pointer -> kern_return_t in
             pointer.withMemoryRebound(to: integer_t.self, capacity: words) { rebound in
                 task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), rebound, &count)
             }
         }
-        return result == KERN_SUCCESS ? info.phys_footprint : 0
+        return result == KERN_SUCCESS ? UInt64(info.phys_footprint) : 0
     }
 }
 
