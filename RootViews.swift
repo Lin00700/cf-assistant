@@ -98,23 +98,46 @@ struct RootView: View {
         skin.isDark || (skin == .ink && scheme == .dark)
     }
 
+    @State private var tab = 0
+    @State private var tabSize: CGSize = .zero
+    /// 普通 IPA 没有 CFTunnel.appex，悬浮球不出现。
+    private var vpnBuild: Bool { VPNManager.shared.extensionBundleID != nil }
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             NavigationStack { OverviewView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("首页", systemImage: "square.grid.2x2.fill") }
+                .tag(0)
             NavigationStack { ZonesView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("域名", systemImage: "globe") }
+                .tag(1)
             NavigationStack { ProductsView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("产品", systemImage: "square.stack.3d.up.fill") }
+                .tag(2)
             NavigationStack { VPNDashboardView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("VPN", systemImage: "lock.shield.fill") }
+                .tag(3)
             NavigationStack { MeView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
+                .tag(4)
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .allowsHitTesting(false)
+                    .preference(key: TabSizeKey.self, value: geo.size)
+            }
+        )
+        .onPreferenceChange(TabSizeKey.self) { tabSize = $0 }
+        .overlay(alignment: .topLeading) {
+            if vpnBuild && tab == 0 && tabSize.width > 1 {
+                VPNFloatBall(container: tabSize) { tab = 3 }
+            }
         }
         .tint(skin.accent)
         .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
@@ -122,6 +145,11 @@ struct RootView: View {
         .toolbarColorScheme(darkChrome ? .dark : .light, for: .tabBar)
         .id("\(session.accountId)-\(skinRaw)")
     }
+}
+
+private struct TabSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
 }
 
 struct DeveloperView: View {

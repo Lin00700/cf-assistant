@@ -193,10 +193,12 @@ struct OverviewView: View {
         InkBanner(height: 168) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(Self.dateText).font(.subheadline).foregroundColor(InkTheme.inkSoft)
-                Text("\(Self.greeting)，\(accountName)")
-                    .font(.custom("SongtiSC-Bold", size: 28, relativeTo: .title2))
+                Text("\(Self.greeting)，\(Self.shortAccountName(accountName))")
+                    .font(.custom("SongtiSC-Bold", size: 18, relativeTo: .headline))
                     .foregroundColor(InkTheme.ink)
                     .lineLimit(2)
+                    .minimumScaleFactor(0.65)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Text(zoneSummary).font(.subheadline).foregroundColor(InkTheme.inkSoft)
             }
         }
@@ -215,6 +217,19 @@ struct OverviewView: View {
         case 12..<18: return "下午好"
         default: return "晚上好"
         }
+    }
+
+    /// Cloudflare 默认账户名常为「邮箱's Account」。首页只留短名。
+    static func shortAccountName(_ raw: String) -> String {
+        var name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suffixes = ["'s Account", "’s Account", "的账户", "的帐户"]
+        for suffix in suffixes where name.hasSuffix(suffix) {
+            name = String(name.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let at = name.firstIndex(of: "@") {
+            name = String(name[..<at])
+        }
+        return name.isEmpty ? "账户" : name
     }
 
     private static var dateText: String {
