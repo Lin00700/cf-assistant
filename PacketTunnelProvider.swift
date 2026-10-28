@@ -58,6 +58,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try? fm.createDirectory(at: temp, withIntermediateDirectories: true)
 
         TunnelLog.shared.add("[ext] 配置 \(config.count) 字节")
+        TunnelLog.shared.add(Self.redactedConfigSummary(config))
 
         let setup = LibboxSetupOptions()
         setup.basePath = base.path
@@ -91,6 +92,47 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         service = svc
         TunnelLog.shared.add("[ext] sing-box 已启动")
+    }
+
+    /// 写入 VPN 日志的配置摘要。去掉 uuid / 密码，方便核对扩展真正启动的节点。
+    private static func redactedConfigSummary(_ config: String) -> String {
+        guard let data = config.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "[ext] 配置不是 JSON"
+        }
+        let dns = root["dns"] as? [String: Any]
+        let dnsFinal = dns?["final"] as? String ?? "?"
+        let servers = (dns?["servers"] as? [[String: Any]] ?? []).map { s -> String in
+            let tag = s["tag"] as? String ?? "?"
+            let addr = s["address"] as? String ?? "?"
+            let detour = s["detour"] as? String ?? "-"
+            return "\(tag)=\(addr)@\(detour)"
+        }.joined(separator: ", ")
+        let route = root["route"] as? [String: Any]
+        let routeFinal = route?["final"] as? String ?? "?"
+        let ruleCount = (route?["rules"] as? [Any])?.count ?? 0
+        let tun = (root["inbounds"] as? [[String: Any]])?.first ?? [:]
+        let tunAddr = (tun["address"] as? [String])?.joined(separator: ",") ?? "?"
+        let excludeCount = (tun["inet4_route_exclude_address"] as? [String])?.count ?? 0
+        let outbounds = root["outbounds"] as? [[String: Any]] ?? []
+        var counts: [String: Int] = [:]
+        var selected = "?"
+        for o in outbounds {
+            let type = o["type"] as? String ?? "?"
+            counts[type, default: 0] += 1
+            if type == "selector", (o["tag"] as? String) == "proxy" {
+                selected = o["default"] as? String ?? "?"
+            }
+        }
+        let chosen = outbounds.first { ($0["tag"] as? String) == selected }
+        var nodeLine = "未找到默认节点"
+        if let chosen {
+            let tls = chosen["tls"] as? [String: Any]
+            let tr = chosen["transport"] as? [String: Any]
+            nodeLine = "\(chosen["type"] ?? "?") \(chosen["server"] ?? "?"):\(chosen["server_port"] ?? "?") sni=\(tls?["server_name"] ?? "-") transport=\(tr?["type"] ?? "tcp")"
+        }
+        let tally = counts.keys.sorted().map { "\($0)=\(counts[$0] ?? 0)" }.joined(separator: " ")
+        return "[ext] dns.final=\(dnsFinal) [\(servers)] route.final=\(routeFinal) rules=\(ruleCount) tun=\(tunAddr) exclude=\(excludeCount) proxy.default=\(selected) \(nodeLine) out=[\(tally)]"
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {

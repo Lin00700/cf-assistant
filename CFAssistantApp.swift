@@ -23,7 +23,12 @@ struct CFAssistantApp: App {
                 .environmentObject(session)
                 .tint(skin.accent)
                 .id("\(session.accountId)-\(skinRaw)")
-                .onAppear { InkChrome.apply() }
+                .onAppear {
+                    InkChrome.apply()
+                    #if VPN_BUILD
+                    Task { await VPNManager.shared.load() }
+                    #endif
+                }
                 .onChange(of: skinRaw) { _ in InkChrome.apply() }
             }
             .preferredColorScheme(skin.lockedScheme)
