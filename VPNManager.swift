@@ -10,9 +10,9 @@ final class VPNManager: ObservableObject {
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
-    private var tail: Task<Void, Never>?
-    /// Shown at the top of VPN 日志 after launch removes extra system VPN profiles.
-    private var cleanupNote: String?
+    /// Last extension log captured before the process exited. VPN 日志 shows this
+    /// after the tunnel drops and the message channel is gone.
+    @Published var savedLog: String = UserDefaults.standard.string(forKey: "vpn.tunnel.log") ?? ""
 
     var isActive: Bool { status == .connected || status == .connecting || status == .reasserting }
     var isConnected: Bool { status == .connected }
@@ -28,99 +28,36 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// Packet tunnel id. Re-signers rewrite the host id (for example com.cfassistant.ios123);
-    /// the tunnel is always that id plus ".tunnel". Never return CFControl — it is a widget,
-    /// and pointing NE at it makes the VPN start and immediately drop.
+    /// Bundle id of the embedded packet tunnel, as rewritten by the re-signer.
+    /// With only CFTunnel.appex this is the same lookup the working 1.1.0 build uses.
+    /// If that bundle cannot be opened, fall back to the host id plus ".tunnel".
     var extensionBundleID: String? {
-        guard let host = Bundle.main.bundleIdentifier, !host.isEmpty else { return nil }
-        let derived = host + ".tunnel"
+        let derived: String? = {
+            guard let host = Bundle.main.bundleIdentifier, !host.isEmpty else { return nil }
+            return host + ".tunnel"
+        }()
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-        else { return nil }
-        let appexes = items.filter { $0.pathExtension == "appex" }
-        if appexes.contains(where: { $0.lastPathComponent == "CFTunnel.appex" }) {
-            return derived
+        else { return derived }
+        if let tunnel = items.first(where: { $0.lastPathComponent == "CFTunnel.appex" }),
+           let id = Bundle(url: tunnel)?.bundleIdentifier, !id.isEmpty {
+            return id
         }
-        for url in appexes {
+        for url in items where url.pathExtension == "appex" {
             if let id = Bundle(url: url)?.bundleIdentifier, id == derived || id.hasSuffix(".tunnel") {
                 return id
             }
         }
-        return nil
+        return derived
     }
 
     func load() async {
-        await enqueue { await self.loadBody() }
-    }
-
-    /// One profile only. A versioned CFControl extension can save a second
-    /// NETunnelProviderManager (it has the packet-tunnel entitlement and its own
-    /// toggle), and iOS then runs that profile instead of CFTunnel.
-    private func loadBody() async {
         do {
             let all = try await NETunnelProviderManager.loadAllFromPreferences()
-            if let kept = try await keepSingleManager(all) {
-                attach(kept)
-            } else {
-                manager = nil
-                status = .disconnected
-            }
+            if let m = all.first { attach(m) }
         } catch {
             self.error = error.localizedDescription
         }
-    }
-
-    private func keepSingleManager(_ all: [NETunnelProviderManager]) async throws -> NETunnelProviderManager? {
-        let tunnelID = extensionBundleID
-        func bundleID(_ m: NETunnelProviderManager) -> String? {
-            (m.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
-        }
-        func isTunnel(_ m: NETunnelProviderManager) -> Bool {
-            guard let id = bundleID(m) else { return false }
-            if let tunnelID, id == tunnelID { return true }
-            return id.hasSuffix(".tunnel")
-        }
-        let ours = all.filter(isTunnel)
-        let keep = ours.first {
-            let s = $0.connection.status
-            return s == .connected || s == .connecting || s == .reasserting
-        } ?? ours.first { $0.isEnabled } ?? ours.first
-        var removed = 0
-        for m in all {
-            if let keep, m === keep { continue }
-            await removeManager(m)
-            removed += 1
-        }
-        if removed > 0 {
-            let keptID = keep.flatMap(bundleID) ?? "无"
-            cleanupNote = "已删除 \(removed) 个多余的 VPN 配置，保留 \(keptID)。"
-        }
-        if let keep {
-            try await keep.loadFromPreferences()
-        }
-        return keep
-    }
-
-    private func removeManager(_ m: NETunnelProviderManager) async {
-        let s = m.connection.status
-        if s == .connected || s == .connecting || s == .reasserting {
-            m.connection.stopVPNTunnel()
-        }
-        m.isEnabled = false
-        m.isOnDemandEnabled = false
-        m.onDemandRules = []
-        try? await m.saveToPreferences()
-        try? await m.removeFromPreferences()
-    }
-
-    private func enqueue(_ body: @escaping @MainActor () async -> Void) async {
-        let previous = tail
-        let next = Task { @MainActor in
-            await previous?.value
-            await body()
-        }
-        tail = next
-        await next.value
     }
 
     private func attach(_ m: NETunnelProviderManager) {
@@ -141,6 +78,7 @@ final class VPNManager: ObservableObject {
                     if self.error == nil {
                         self.error = "VPN 未能保持连接（扩展启动失败或配置被拒）。请确认已装「VPN 版」IPA，并检查节点加密方式后重试。"
                     }
+                    Task { await self.captureTunnelLog() }
                 }
                 if self.status == .connected {
                     self.error = nil
@@ -173,39 +111,49 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    func fetchLog() async -> String {
-        let prefix = cleanupNote.map { "[app] \($0)\n" } ?? ""
+    func captureTunnelLog() async {
+        let text = await fetchLog(allowDisconnected: true)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        savedLog = text
+        UserDefaults.standard.set(text, forKey: "vpn.tunnel.log")
+    }
+
+    func fetchLog(allowDisconnected: Bool = false) async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
-            return prefix + "无法取得 NETunnelProviderSession（manager 未就绪）。"
+            if !savedLog.isEmpty { return savedLog }
+            return "无法取得 NETunnelProviderSession（manager 未就绪）。"
         }
-        if status == .invalid || status == .disconnected {
-            return prefix + "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
+        if !allowDisconnected, status == .invalid || status == .disconnected {
+            if !savedLog.isEmpty { return savedLog }
+            return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
         }
         return await withCheckedContinuation { cont in
             do {
                 try session.sendProviderMessage(Data("log".utf8)) { data in
                     guard let data else {
-                        cont.resume(returning: prefix + "扩展回了 nil 数据（进程可能已退出或消息通道未就绪）。")
+                        cont.resume(returning: self.savedLog.isEmpty
+                            ? "扩展回了 nil 数据（进程可能已退出或消息通道未就绪）。"
+                            : self.savedLog)
                         return
                     }
                     let text = String(data: data, encoding: .utf8) ?? ""
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        cont.resume(returning: prefix + "（扩展返回空字符串）状态=\(self.statusText)")
+                        cont.resume(returning: self.savedLog.isEmpty
+                            ? "（扩展返回空字符串）状态=\(self.statusText)"
+                            : self.savedLog)
                     } else {
-                        cont.resume(returning: prefix + text)
+                        cont.resume(returning: text)
                     }
                 }
             } catch {
-                cont.resume(returning: "读取失败：\(error.localizedDescription)")
+                cont.resume(returning: self.savedLog.isEmpty
+                    ? "读取失败：\(error.localizedDescription)"
+                    : self.savedLog)
             }
         }
     }
 
     func set(on: Bool, store: ProxyStore) async {
-        await enqueue { await self.apply(on: on, store: store) }
-    }
-
-    private func apply(on: Bool, store: ProxyStore) async {
         error = nil
         do {
             if on {

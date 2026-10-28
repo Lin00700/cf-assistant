@@ -523,7 +523,7 @@ struct VPNLogView: View {
             Text(text).font(.system(size: 11, design: .monospaced)).padding()
         }
         .navigationTitle("日志")
-        .task { text = await vpn.fetchLog() }
+        .task { text = await vpn.fetchLog(allowDisconnected: true) }
     }
 }
 
