@@ -34,6 +34,7 @@ targets:
         SWIFT_VERSION: "5.9"
         MARKETING_VERSION: "1.2.0"
         CURRENT_PROJECT_VERSION: "3"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: VPN_BUILD
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: "CF助手"
@@ -105,6 +106,19 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
+  ConfigParityTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: CFAssistant
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios.configtests
+        SWIFT_VERSION: "5.9"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: VPN_BUILD
 schemes:
   CFAssistant:
     build:
@@ -112,3 +126,6 @@ schemes:
         CFAssistant: all
         CFTunnel: all
         CFControl: all
+    test:
+      targets:
+        - ConfigParityTests

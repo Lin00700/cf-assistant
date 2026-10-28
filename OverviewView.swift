@@ -191,16 +191,28 @@ struct OverviewView: View {
 
     private func header(_ accountName: String) -> some View {
         InkBanner(height: 168) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(Self.dateText).font(.subheadline).foregroundColor(InkTheme.inkSoft)
-                Text("\(Self.greeting)，\(Self.shortAccountName(accountName))")
-                    .font(.custom("SongtiSC-Bold", size: 18, relativeTo: .headline))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.dateText)
+                    .font(.caption)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                Text(Self.greeting)
+                    .font(.subheadline)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                Text(Self.shortAccountName(accountName))
+                    .font(.custom("SongtiSC-Bold", size: 17, relativeTo: .body))
                     .foregroundColor(InkTheme.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(zoneSummary).font(.subheadline).foregroundColor(InkTheme.inkSoft)
+                Text(zoneSummary)
+                    .font(.caption)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
+            .padding(.trailing, 72)
         }
     }
 
@@ -222,8 +234,10 @@ struct OverviewView: View {
     /// Cloudflare 默认账户名常为「邮箱's Account」。首页只留短名。
     static func shortAccountName(_ raw: String) -> String {
         var name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let suffixes = ["'s Account", "’s Account", "的账户", "的帐户"]
-        for suffix in suffixes where name.hasSuffix(suffix) {
+        if let range = name.range(of: #"['’‘ʼ]s Account\s*$"#, options: .regularExpression) {
+            name = String(name[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for suffix in ["的账户", "的帐户"] where name.hasSuffix(suffix) {
             name = String(name.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if let at = name.firstIndex(of: "@") {

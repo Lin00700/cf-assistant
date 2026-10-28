@@ -140,9 +140,7 @@ struct ProxyNodeSections: View {
                     }
                 }
             } footer: {
-                Text(vpn.isConnected
-                     ? "VPN 已连接时通过代理探测真实延迟。"
-                     : "未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑节点可编辑。")
+                Text("未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑节点可编辑。")
             }
             ForEach(protocols, id: \.self) { proto in
                 Section(header: Text("\(title(proto))（\(nodes(of: proto).count)）")) {

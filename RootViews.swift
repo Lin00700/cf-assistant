@@ -99,9 +99,6 @@ struct RootView: View {
     }
 
     @State private var tab = 0
-    @State private var tabSize: CGSize = .zero
-    /// 普通 IPA 没有 CFTunnel.appex，悬浮球不出现。
-    private var vpnBuild: Bool { VPNManager.shared.extensionBundleID != nil }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -126,19 +123,7 @@ struct RootView: View {
                 .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
                 .tag(4)
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear
-                    .allowsHitTesting(false)
-                    .preference(key: TabSizeKey.self, value: geo.size)
-            }
-        )
-        .onPreferenceChange(TabSizeKey.self) { tabSize = $0 }
-        .overlay(alignment: .topLeading) {
-            if vpnBuild && tab == 0 && tabSize.width > 1 {
-                VPNFloatBall(container: tabSize) { tab = 3 }
-            }
-        }
+        .modifier(VPNHomeBallOverlay(tab: $tab))
         .tint(skin.accent)
         .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
@@ -147,9 +132,20 @@ struct RootView: View {
     }
 }
 
-private struct TabSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+private struct VPNHomeBallOverlay: ViewModifier {
+    @Binding var tab: Int
+
+    func body(content: Content) -> some View {
+        #if VPN_BUILD
+        content.overlay(alignment: .topLeading) {
+            if tab == 0 {
+                VPNFloatBall(container: UIScreen.main.bounds.size) { tab = 3 }
+            }
+        }
+        #else
+        content
+        #endif
+    }
 }
 
 struct DeveloperView: View {
