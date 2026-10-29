@@ -152,7 +152,9 @@ final class VPNManager: ObservableObject {
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = store.selected?.server ?? "sing-box"
+                // Match the working profile: iOS Server shows the parsed node
+                // label, while the actual remote host remains in sing-box config.
+                proto.serverAddress = store.selected?.name ?? "127.0.0.1"
                 proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"

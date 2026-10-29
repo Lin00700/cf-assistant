@@ -219,13 +219,16 @@ struct ProxyNodeSections: View {
                     Task { await store.refreshLatency(vpnConnected: vpn.isConnected) }
                 } label: {
                     if store.isRefreshing {
-                        HStack { ProgressView(); Text("正在测试 TCP…") }
+                        HStack {
+                            ProgressView()
+                            Text(vpn.isConnected ? "正在测代理延迟…" : "正在测试 TCP…")
+                        }
                     } else {
                         Text("刷新延迟")
                     }
                 }
             } footer: {
-                Text("未连接内置 VPN 时也可刷新：测试节点 TCP 端口是否可达及建连延迟。左滑编辑，右滑删除。")
+                Text("连接内置 VPN 后测试每个节点的代理 HTTPS 延迟；未连接时测试 TCP 端口建连延迟。左滑编辑，右滑删除。")
             }
             ForEach(protocols, id: \.self) { proto in
                 let group = nodes(of: proto)
@@ -643,6 +646,9 @@ struct ImportNodesView: View {
                     }
                     Button("加入 \(nodes.count) 个") {
                         store.add(nodes)
+                        if let first = nodes.first {
+                            store.selectedID = first.id
+                        }
                         dismiss()
                     }
                 }

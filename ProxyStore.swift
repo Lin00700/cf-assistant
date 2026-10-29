@@ -140,15 +140,31 @@ final class ProxyStore: ObservableObject {
         results = [:]
     }
 
-    /// 节点列表始终显示直连 TCP 延迟（与 main 一致）。
-    /// `vpnConnected` 保留给旧调用点，但不再改成 sing-box 代理探测，避免几百个节点把隧道打满。
+    /// 未连接 VPN 时显示 TCP 建连延迟；已连接时显示经每个节点的代理 HTTPS 延迟。
     func refreshLatency(vpnConnected: Bool) async {
-        _ = vpnConnected
         if isRefreshing || nodes.isEmpty { return }
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
-        results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        if vpnConnected {
+            let usable = nodes.filter(SingBoxConfig.isSupported)
+            do {
+                let measured = try await ProxyLatencyTester.measureViaSingBox(
+                    nodes: usable,
+                    controlURL: SingBoxConfig.controlURL
+                )
+                var next = measured
+                for node in nodes where next[node.id] == nil {
+                    next[node.id] = .probeFailed
+                }
+                results = next
+            } catch {
+                refreshError = error.localizedDescription
+                results = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, .probeFailed) })
+            }
+        } else {
+            results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        }
     }
 
     /// 可选的代理 HTTPS 探测。不写入 `results`，因此不会盖掉 TCP 毫秒。

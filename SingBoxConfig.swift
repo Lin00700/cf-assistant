@@ -40,7 +40,9 @@ enum SingBoxConfig {
             if let mode = n.p("mode") { t["mode"] = mode }
             if let path = n.p("path") { t["path"] = path }
             if let host = n.p("host") { t["host"] = host }
-            if let bytes = n.p("x_padding_bytes") { t["x_padding_bytes"] = bytes }
+            // Xray's XHTTP default is 100–1000 bytes; make it explicit so an
+            // imported Xray link without xPaddingBytes keeps the same wire format.
+            t["x_padding_bytes"] = n.p("x_padding_bytes") ?? "100-1000"
             if let obfsMode = n.p("x_padding_obfs_mode") {
                 t["x_padding_obfs_mode"] = ["1", "true", "yes"].contains(obfsMode.lowercased())
             }

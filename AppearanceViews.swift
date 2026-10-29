@@ -1,10 +1,12 @@
 import SwiftUI
 import PhotosUI
 import ImageIO
+import UniformTypeIdentifiers
+import WebKit
 
 struct AppBackdropView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
-    @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.28
     @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
 
     private var skin: ChineseSkin {
@@ -14,14 +16,12 @@ struct AppBackdropView: View {
     var body: some View {
         ZStack {
             InkWashBackground()
-            if let ui = WallpaperStore.load(filename: wallpaperFilename) {
-                Image(uiImage: ui)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
+            if WallpaperStore.fileURL(filename: wallpaperFilename) != nil {
+                WallpaperWebView(filename: wallpaperFilename)
                     .ignoresSafeArea()
-                Color(skin.isDark ? .black : .white).opacity(wallpaperWash).ignoresSafeArea()
+                Color(skin.isDark ? .black : .white)
+                    .opacity(wallpaperWash)
+                    .ignoresSafeArea()
             }
         }
         .allowsHitTesting(false)
@@ -37,42 +37,83 @@ enum WallpaperStore {
         return d
     }
 
-    static func save(_ image: UIImage) -> String? {
-        guard let data = image.jpegData(compressionQuality: 0.85) else { return nil }
-        let name = UUID().uuidString + ".jpg"
-        let url = dir.appendingPathComponent(name)
+    static func save(_ data: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0,
+              CGImageSourceCreateImageAtIndex(source, 0, nil) != nil else { return nil }
+        let type = (CGImageSourceGetType(source) as String?) ?? UTType.jpeg.identifier
+        let ext = UTType(type)?.preferredFilenameExtension ?? "jpg"
+        let name = UUID().uuidString + "." + ext
         do {
-            try data.write(to: url, options: .atomic)
+            try data.write(to: dir.appendingPathComponent(name), options: .atomic)
             return name
         } catch {
             return nil
         }
     }
 
-    static func load(filename: String) -> UIImage? {
-        guard !filename.isEmpty else { return nil }
+    static func fileURL(filename: String) -> URL? {
+        guard !filename.isEmpty,
+              URL(fileURLWithPath: filename).lastPathComponent == filename else { return nil }
         let url = dir.appendingPathComponent(filename)
-        guard let data = try? Data(contentsOf: url),
-              let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 4096
-        ]
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        return UIImage(cgImage: image)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
     }
 
     static func delete(filename: String) {
-        guard !filename.isEmpty else { return }
-        let url = dir.appendingPathComponent(filename)
+        guard let url = fileURL(filename: filename) else { return }
         try? FileManager.default.removeItem(at: url)
+    }
+}
+
+private struct WallpaperWebView: UIViewRepresentable {
+    let filename: String
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero)
+        view.isOpaque = false
+        view.backgroundColor = .clear
+        view.scrollView.backgroundColor = .clear
+        view.scrollView.isScrollEnabled = false
+        view.scrollView.bounces = false
+        view.scrollView.contentInsetAdjustmentBehavior = .never
+        load(filename, into: view, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateUIView(_ view: WKWebView, context: Context) {
+        guard context.coordinator.loadedFilename != filename else { return }
+        load(filename, into: view, coordinator: context.coordinator)
+    }
+
+    private func load(_ filename: String, into view: WKWebView, coordinator: Coordinator) {
+        guard let url = WallpaperStore.fileURL(filename: filename) else { return }
+        let escapedName = url.lastPathComponent
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "'", with: "&#39;")
+        let html = """
+        <!doctype html>
+        <html><head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+        <style>
+        html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; background:transparent; }
+        img { position:fixed; inset:0; width:100vw; height:100vh; object-fit:cover; object-position:center; }
+        </style></head><body><img src="\(escapedName)" alt=""></body></html>
+        """
+        view.loadHTMLString(html, baseURL: url.deletingLastPathComponent())
+        coordinator.loadedFilename = filename
+    }
+
+    final class Coordinator {
+        var loadedFilename = ""
     }
 }
 
 struct AppearanceSettingsView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
-    @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.68
+    @AppStorage("appearance.wallpaperWash") private var wallpaperWash = 0.28
     @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
     @State private var pickerItem: PhotosPickerItem?
     @State private var error: String?
@@ -105,10 +146,11 @@ struct AppearanceSettingsView: View {
                 Text("水墨跟随系统深色模式，米纸和墨色都会保持可读。墨夜固定为深色。强调色是朱砂红。青绿、朱砂、月夜仍然可用。")
             }
 
-            Section(footer: Text("自定义壁纸会按屏幕比例完整显示在页面背后；页面内容仍可滚动和操作。")) {
+            Section(footer: Text("支持静态图片和 GIF 动图，壁纸会铺满屏幕；超出屏幕比例的部分会裁切。页面内容仍可滚动和操作。")) {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Label(wallpaperFilename.isEmpty ? "从相册选择壁纸" : "更换壁纸", systemImage: "photo.on.rectangle")
                 }
+                .preferredItemEncoding(.current)
                 if !wallpaperFilename.isEmpty {
                     Button(role: .destructive) {
                         WallpaperStore.delete(filename: wallpaperFilename)
@@ -120,7 +162,7 @@ struct AppearanceSettingsView: View {
             }
             if !wallpaperFilename.isEmpty {
                 Section("遮罩浓度") {
-                    Slider(value: $wallpaperWash, in: 0.2...0.9, step: 0.02)
+                    Slider(value: $wallpaperWash, in: 0.0...0.75, step: 0.02)
                 }
             }
         }
@@ -135,18 +177,18 @@ struct AppearanceSettingsView: View {
     private func loadPhoto(_ item: PhotosPickerItem) async {
         do {
             guard let data = try await item.loadTransferable(type: Data.self),
-                  let img = UIImage(data: data) else {
+                  let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  CGImageSourceGetCount(source) > 0 else {
                 error = "无法读取图片"
                 return
             }
-            if !wallpaperFilename.isEmpty {
-                WallpaperStore.delete(filename: wallpaperFilename)
-            }
-            guard let name = WallpaperStore.save(img) else {
+            guard let name = WallpaperStore.save(data) else {
                 error = "保存失败"
                 return
             }
+            let old = wallpaperFilename
             wallpaperFilename = name
+            if !old.isEmpty { WallpaperStore.delete(filename: old) }
         } catch {
             self.error = error.localizedDescription
         }
