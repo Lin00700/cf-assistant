@@ -434,24 +434,24 @@ struct TunnelDebugView: View {
     }
 
     private var configText: String {
-        let raw = vpn.sentConfig
-        guard !raw.isEmpty,
-              let data = raw.data(using: .utf8),
+        let raw = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
+                                      mode: store.selectionMode, bypassCN: store.bypassCN,
+                                      rules: store.routingRules,
+                                      categoryPolicies: store.categoryPolicies)
+        guard let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: pretty, encoding: .utf8) else {
-            return raw.isEmpty ? "（还没有把配置交给扩展。先连接一次 VPN。）" : raw
-        }
+              let text = String(data: pretty, encoding: .utf8) else { return raw }
         return text
     }
 
     private var bodyText: String {
         """
         ===== 当前选中 =====
-        \(vpn.sentConfig.isEmpty ? "尚未连接" : "以下 JSON 是最近一次连接写进扩展的原文")
         界面选中：\(storeLine)
+        下面这份 JSON 与 VPNManager.set(on:) 调用的 SingBoxConfig.build 参数相同。
 
-        ===== 交给扩展的 config =====
+        ===== config =====
         \(configText)
 
         ===== sing-box / 扩展日志 =====

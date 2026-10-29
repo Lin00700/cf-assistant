@@ -18,55 +18,16 @@ final class TunnelLog {
         let line = "[\(ts)] \(s)"
         lock.lock(); defer { lock.unlock() }
         lines.append(line)
-        if lines.count > 4000 { lines.removeFirst(lines.count - 4000) }
+        if lines.count > 600 { lines.removeFirst(lines.count - 600) }
         NSLog("CFTunnel: %@", s)
-        Self.appendFile(line)
     }
 
     func text() -> String {
         lock.lock(); defer { lock.unlock() }
-        let disk = (try? String(contentsOf: Self.fileURL, encoding: .utf8)) ?? ""
-        let mem = lines.joined(separator: "\n")
-        let body = disk.isEmpty ? mem : disk
-        if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if lines.isEmpty {
             return "（扩展日志为空：可能尚未启动、启动失败，或进程刚被系统杀掉）"
         }
-        return body
-    }
-
-    /// NE provider messages fail (callback data is nil) when the payload is too large.
-    func messageText() -> String {
-        let full = text()
-        let cap = 24_000
-        let body: String
-        if full.count > cap {
-            body = "…(只回最后 \(cap) 字)\n" + String(full.suffix(cap))
-        } else {
-            body = full
-        }
-        return "log file: \(Self.fileURL.path)\n" + body
-    }
-
-    /// sing-box debug lines (via writeLog) and our own lines, inside the extension container.
-    private static var fileURL: URL {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("sing-box-log.txt")
-    }
-
-    private static func appendFile(_ line: String) {
-        let url = fileURL
-        let payload = Data((line + "\n").utf8)
-        if let data = try? Data(contentsOf: url), data.count > 400_000 {
-            try? data.suffix(200_000).write(to: url, options: .atomic)
-        }
-        if FileManager.default.fileExists(atPath: url.path),
-           let handle = try? FileHandle(forWritingTo: url) {
-            defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: payload)
-        } else {
-            try? payload.write(to: url, options: .atomic)
-        }
+        return lines.joined(separator: "\n")
     }
 
     func clear() {
@@ -133,8 +94,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
-        let payload = Data(TunnelLog.shared.messageText().utf8)
-        completionHandler?(payload)
+        completionHandler?(Data(TunnelLog.shared.text().utf8))
     }
 
     override func stopTunnel(with reason: NEProviderStopReason) async {

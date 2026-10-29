@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 import NetworkExtension
 
 @MainActor
@@ -8,8 +7,6 @@ final class VPNManager: ObservableObject {
 
     @Published var status: NEVPNStatus = .invalid
     @Published var error: String?
-    /// Exact JSON last passed to the extension as providerConfiguration["config"].
-    @Published var sentConfig: String = ""
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
@@ -108,93 +105,26 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// Prefer the checked node when its host is a real IP or hostname. Otherwise the first node whose TCP probe succeeded.
-    private static func pickNode(_ store: ProxyStore) -> ProxyNode? {
-        let usable = store.nodes.filter { SingBoxConfig.isSupported($0) && SingBoxConfig.isDialableHost($0.server) }
-        if let selected = store.selected, usable.contains(where: { $0.id == selected.id }) {
-            return selected
-        }
-        return usable.first { node in
-            switch store.results[node.id] {
-            case .tcpLatency, .latency: return true
-            default: return false
-            }
-        }
-    }
-
-    /// A records for hostname nodes, so their /32s can bypass the tun. Bounded so a dead resolver cannot stall connect.
-    private static func resolvedNodeCIDRs(_ nodes: [ProxyNode]) async -> [String] {
-        var cidrs: [String] = []
-        for node in nodes where SingBoxConfig.isSupported(node) {
-            let host = node.server
-            if host.split(separator: ".").count == 4, host.split(separator: ".").allSatisfy({ Int($0) != nil }) {
-                continue
-            }
-            let ips = await lookupIPv4(host)
-            for ip in ips where !cidrs.contains("\(ip)/32") {
-                cidrs.append("\(ip)/32")
-            }
-        }
-        return cidrs
-    }
-
-    private static func lookupIPv4(_ host: String) async -> [String] {
-        await withTaskGroup(of: [String].self) { group in
-            group.addTask {
-                await Task.detached(priority: .utility) {
-                    var hints = addrinfo()
-                    hints.ai_family = AF_INET
-                    hints.ai_socktype = Int32(SOCK_STREAM)
-                    var resolved: UnsafeMutablePointer<addrinfo>?
-                    guard getaddrinfo(host, nil, &hints, &resolved) == 0, let first = resolved else { return [] }
-                    defer { freeaddrinfo(first) }
-                    var addresses: [String] = []
-                    var current: UnsafeMutablePointer<addrinfo>? = first
-                    while let item = current {
-                        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                        if getnameinfo(item.pointee.ai_addr, item.pointee.ai_addrlen,
-                                       &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
-                            let address = String(cString: buffer)
-                            if !addresses.contains(address) { addresses.append(address) }
-                        }
-                        current = item.pointee.ai_next
-                    }
-                    return addresses
-                }.value
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                return []
-            }
-            let first = await group.next() ?? []
-            group.cancelAll()
-            return first
-        }
-    }
-
     func set(on: Bool, store: ProxyStore) async {
         error = nil
         do {
             if on {
-                guard let node = Self.pickNode(store) else {
-                    error = "当前节点地址无效（不是正常的 IP 或域名，像是未解码的分享串）。请改选已测通的节点，例如「台湾 31」，或先点刷新延迟。"
+                guard store.nodes.contains(where: SingBoxConfig.isSupported) else {
+                    error = "请先添加并选择一个可用节点"
                     return
                 }
-                if store.selectedID != node.id { store.selectedID = node.id }
                 guard let extID = extensionBundleID else {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return
                 }
-                let extra = await Self.resolvedNodeCIDRs([node])
-                let config = SingBoxConfig.build(nodes: [node], selectedID: node.id,
+                let config = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
-                                                 resolvedExcludes: extra)
-                sentConfig = config
+                                                 categoryPolicies: store.categoryPolicies)
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = node.server
+                proto.serverAddress = store.selected?.server ?? "sing-box"
                 proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
