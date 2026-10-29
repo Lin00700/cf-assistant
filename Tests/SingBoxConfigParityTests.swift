@@ -1,10 +1,10 @@
 import XCTest
 @testable import CFAssistant
 
-/// VLESS+WS+TLS 出站、大陆直连后缀、dns.final=dns-local，以及系统 DNS 必须在
-/// ip_is_private 之前被劫持。不引用本地 geo 文件。
+/// sing-box 1.11.15 legacy config: VLESS+WS+TLS, UDP DNS 223.5.5.5,
+/// IPv4 TUN exclusions, and DNS hijack before private-IP bypass.
 final class SingBoxConfigParityTests: XCTestCase {
-    func testVLESSWebSocketTLSWithBypassCNMatchesMainShape() throws {
+    func testLegacyVLESSWebSocketTLSConfigUsesSingBox111Shape() throws {
         let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         var node = ProxyNode(
             name: "sample",
@@ -49,39 +49,85 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertEqual(headers["Host"] as? String, "example.com")
 
         let dns = try XCTUnwrap(root["dns"] as? [String: Any])
-        XCTAssertEqual(dns["final"] as? String, "dns-local")
+        XCTAssertEqual(dns["final"] as? String, "dns-remote")
+        XCTAssertEqual(dns["independent_cache"] as? Bool, true)
         let servers = try XCTUnwrap(dns["servers"] as? [[String: Any]])
-        XCTAssertTrue(servers.contains { $0["type"] as? String == "https" && $0["server"] as? String == "1.1.1.1" && $0["path"] as? String == "/dns-query" && $0["detour"] as? String == "direct" })
-        XCTAssertTrue(servers.contains { $0["type"] as? String == "tls" && $0["server"] as? String == "8.8.8.8" && $0["detour"] as? String == "proxy" })
+        XCTAssertTrue(servers.contains {
+            $0["tag"] as? String == "dns-local" &&
+            $0["address"] as? String == "udp://223.5.5.5" &&
+            $0["detour"] as? String == "direct"
+        })
+        XCTAssertTrue(servers.contains {
+            $0["tag"] as? String == "dns-remote" &&
+            $0["address"] as? String == "tls://8.8.8.8" &&
+            $0["detour"] as? String == "proxy"
+        })
 
         let route = try XCTUnwrap(root["route"] as? [String: Any])
         XCTAssertEqual(route["final"] as? String, "proxy")
-        XCTAssertEqual(route["auto_detect_interface"] as? Bool, true)
+        XCTAssertEqual(route["auto_detect_interface"] as? Bool, false)
+        XCTAssertNil(route["default_domain_resolver"])
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
         let cn = try XCTUnwrap(rules.first { ($0["domain_suffix"] as? [String])?.contains("baidu.com") == true })
         XCTAssertEqual(cn["outbound"] as? String, "direct")
         let sniff = try XCTUnwrap(rules.first { $0["action"] as? String == "sniff" })
         let sniffers = try XCTUnwrap(sniff["sniffer"] as? [String])
-        XCTAssertTrue(sniffers.contains("dns"))
-        let hijackIndex = try XCTUnwrap(rules.firstIndex { $0["action"] as? String == "hijack-dns" && $0["port"] as? Int == 53 })
+        XCTAssertTrue(sniffers.contains("tls"))
+        XCTAssertFalse(sniffers.contains("dns"))
+        let hijackIndex = try XCTUnwrap(rules.firstIndex {
+            $0["action"] as? String == "hijack-dns" && $0["protocol"] as? String == "dns"
+        })
         let privateIndex = try XCTUnwrap(rules.firstIndex { $0["ip_is_private"] as? Bool == true })
         XCTAssertLessThan(hijackIndex, privateIndex)
-        let tunDNS = try XCTUnwrap(rules.first { ($0["ip_cidr"] as? [String])?.contains("172.19.0.2/32") == true })
-        XCTAssertEqual(tunDNS["action"] as? String, "hijack-dns")
-        let upstream = try XCTUnwrap(rules.first { ($0["ip_cidr"] as? [String])?.contains("223.5.5.5/32") == true && $0["outbound"] as? String == "direct" })
-        XCTAssertEqual(upstream["outbound"] as? String, "direct")
-        XCTAssertFalse(rules.contains { ($0["ip_cidr"] as? [String])?.contains("1.1.1.1/32") == true && $0["outbound"] as? String == "direct" })
+        XCTAssertFalse(rules.contains {
+            ($0["ip_cidr"] as? [String])?.contains("1.1.1.1/32") == true && $0["outbound"] as? String == "direct"
+        })
 
         let tun = try XCTUnwrap((root["inbounds"] as? [[String: Any]])?.first)
-        let exclude = try XCTUnwrap(tun["route_exclude_address"] as? [String])
+        let exclude = try XCTUnwrap(tun["inet4_route_exclude_address"] as? [String])
         XCTAssertTrue(exclude.contains("104.17.51.244/32"))
-        XCTAssertTrue(exclude.contains("1.1.1.1/32"))
         XCTAssertTrue(exclude.contains("223.5.5.5/32"))
         XCTAssertTrue(exclude.contains("8.8.8.8/32"))
+        XCTAssertFalse(exclude.contains("1.1.1.1/32"))
+        XCTAssertNil(tun["route_exclude_address"])
 
+        XCTAssertFalse(text.contains("1.1.1.1"))
         XCTAssertFalse(text.contains("rule_set"))
         XCTAssertFalse(text.contains("geosite"))
         XCTAssertFalse(text.contains("geoip"))
+    }
+
+    func testLegacyCoreRejectsUnsupportedTransportInsteadOfDroppingIt() throws {
+        let xhttp = ProxyNode(
+            name: "xhttp",
+            proto: "vless",
+            server: "x.io",
+            port: 443,
+            secret: "11111111-1111-1111-1111-111111111111",
+            params: ["type": "xhttp"]
+        )
+        let ws = ProxyNode(
+            name: "ws",
+            proto: "vless",
+            server: "legacy.example.com",
+            port: 443,
+            secret: "11111111-1111-1111-1111-111111111111",
+            params: ["type": "ws", "security": "tls", "host": "legacy.example.com", "path": "/ws"]
+        )
+        XCTAssertFalse(SingBoxConfig.isSupported(xhttp))
+        XCTAssertTrue(SingBoxConfig.isSupported(ws))
+
+        let text = SingBoxConfig.build(
+            nodes: [xhttp, ws],
+            selectedID: xhttp.id,
+            mode: .manual,
+            bypassCN: false,
+            rules: []
+        )
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        let outbounds = try XCTUnwrap(root["outbounds"] as? [[String: Any]])
+        XCTAssertFalse(outbounds.contains { $0["tag"] as? String == SingBoxConfig.nodeTag(xhttp) })
+        XCTAssertTrue(outbounds.contains { $0["tag"] as? String == SingBoxConfig.nodeTag(ws) })
     }
 
     func testShortAccountNameStripsCloudflareDefault() {

@@ -139,6 +139,14 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
             }
             let text = await VPNManager.shared.querySingBoxDNS()
             let elapsed = Int((DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+            if text.hasPrefix("UNSUPPORTED ") {
+                return ConnectivityProbeResult(
+                    kind: .singBoxDNS,
+                    success: false,
+                    elapsedMilliseconds: elapsed,
+                    detail: String(text.dropFirst("UNSUPPORTED ".count))
+                )
+            }
             if text.hasPrefix("OK ") {
                 let rest = String(text.dropFirst(3))
                 return ConnectivityProbeResult(

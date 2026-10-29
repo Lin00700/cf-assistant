@@ -31,11 +31,11 @@ targets:
         PRODUCT_NAME: CFAssistant
         SWIFT_VERSION: "5.9"
         MARKETING_VERSION: "1.2.3"
-        CURRENT_PROJECT_VERSION: "7"
+        CURRENT_PROJECT_VERSION: "8"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: VPN_BUILD
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: "CF助手"
+        INFOPLIST_KEY_CFBundleDisplayName: "CF助手 1.11 测试"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
@@ -57,10 +57,10 @@ targets:
     info:
       path: CFTunnel-Info.plist
       properties:
-        CFBundleDisplayName: CF助手 VPN
+        CFBundleDisplayName: CF助手 VPN 1.11
         NSLocalNetworkUsageDescription: "连接诊断会测试您输入的局域网 IP 和端口，仅用于测量 TCP 连通性。"
         CFBundleShortVersionString: "1.2.3"
-        CFBundleVersion: "7"
+        CFBundleVersion: "8"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSExtension:

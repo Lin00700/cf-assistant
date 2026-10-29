@@ -35,22 +35,6 @@ enum SingBoxConfig {
             var t: [String: Any] = ["type": "httpupgrade", "path": n.p("path") ?? "/"]
             if let h = n.p("host") { t["host"] = h }
             return t
-        case "xhttp":
-            var t: [String: Any] = ["type": "xhttp"]
-            if let mode = n.p("mode") { t["mode"] = mode }
-            if let path = n.p("path") { t["path"] = path }
-            if let host = n.p("host") { t["host"] = host }
-            // Xray's XHTTP default is 100–1000 bytes; make it explicit so an
-            // imported Xray link without xPaddingBytes keeps the same wire format.
-            t["x_padding_bytes"] = n.p("x_padding_bytes") ?? "100-1000"
-            if let obfsMode = n.p("x_padding_obfs_mode") {
-                t["x_padding_obfs_mode"] = ["1", "true", "yes"].contains(obfsMode.lowercased())
-            }
-            if let key = n.p("x_padding_key") { t["x_padding_key"] = key }
-            if let header = n.p("x_padding_header") { t["x_padding_header"] = header }
-            if let method = n.p("x_padding_method") { t["x_padding_method"] = method }
-            if let placement = n.p("x_padding_placement") { t["x_padding_placement"] = placement }
-            return t
         default:
             return nil
         }
@@ -108,8 +92,13 @@ enum SingBoxConfig {
     }
 
     static func isSupported(_ n: ProxyNode) -> Bool {
-        ["vless", "vmess", "trojan", "ss", "hysteria2"].contains(n.proto)
-            && !n.server.isEmpty && !n.secret.isEmpty && (1...65535).contains(n.port)
+        guard ["vless", "vmess", "trojan", "ss", "hysteria2"].contains(n.proto),
+              !n.server.isEmpty, !n.secret.isEmpty, (1...65535).contains(n.port) else { return false }
+        if ["vless", "vmess", "trojan"].contains(n.proto) {
+            let type = n.p("type") ?? n.p("net") ?? "tcp"
+            guard ["tcp", "ws", "grpc", "httpupgrade"].contains(type) else { return false }
+        }
+        return true
     }
 
     private static func literalIPv4(_ host: String) -> String? {
@@ -183,14 +172,10 @@ enum SingBoxConfig {
             }
         }
 
-        // sniff 必须包含 dns。只嗅 tls/http/quic 时，发往 172.19.0.2:53 的查询
-        // 不会被标成 protocol=dns，接着被 ip_is_private 直接送出，系统 DNS 就会空等 30 秒。
+        // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
         var routeRules: [[String: Any]] = [
-            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic", "dns"]],
-            ["ip_cidr": ["223.5.5.5/32", "8.8.8.8/32"], "outbound": "direct"],
+            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic"]],
             ["protocol": "dns", "action": "hijack-dns"],
-            ["ip_cidr": ["172.19.0.2/32", "127.0.0.1/32"], "port": 53, "action": "hijack-dns"],
-            ["port": 53, "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
 
@@ -230,26 +215,21 @@ enum SingBoxConfig {
             }
         }
 
-        // Some mobile networks time out UDP/53 while allowing direct TCP/443.
-        // Use the literal Cloudflare IP to avoid a DNS bootstrap loop; keep this
-        // resolver on the direct outbound for local/domestic DNS rules.
-        // Exclude the DoH endpoint as a /32 so it cannot be re-injected into TUN
-        // if IP_BOUND_IF binding fails. Other traffic to 1.1.1.1 also bypasses VPN.
         let dnsServers: [[String: Any]] = [
-            ["type": "https", "tag": "dns-local", "server": "1.1.1.1", "server_port": 443,
-             "path": "/dns-query", "detour": "direct"],
-            ["type": "udp", "tag": "dns-backup", "server": "8.8.8.8", "server_port": 53, "detour": "direct"],
-            ["type": "tls", "tag": "dns-remote", "server": "8.8.8.8", "server_port": 853, "detour": "proxy"]
+            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
+            ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
+            ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
         ]
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
-            "final": "dns-local",
-            "strategy": "prefer_ipv4"
+            "final": "dns-remote",
+            "strategy": "prefer_ipv4",
+            "independent_cache": true
         ]
 
         var tunExcludes: [String] = nodeIPs
-        tunExcludes.append(contentsOf: ["1.1.1.1/32", "223.5.5.5/32", "8.8.8.8/32"])
+        tunExcludes.append(contentsOf: ["223.5.5.5/32", "8.8.8.8/32"])
         var tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],
@@ -259,14 +239,13 @@ enum SingBoxConfig {
             "stack": "system"
         ]
         if !tunExcludes.isEmpty {
-            tun["route_exclude_address"] = tunExcludes
+            tun["inet4_route_exclude_address"] = tunExcludes
         }
 
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
-            "default_domain_resolver": "dns-local",
-            "auto_detect_interface": true
+            "auto_detect_interface": false
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
