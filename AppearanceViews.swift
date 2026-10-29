@@ -147,10 +147,9 @@ struct AppearanceSettingsView: View {
             }
 
             Section(footer: Text("支持静态图片和 GIF 动图，壁纸会铺满屏幕；超出屏幕比例的部分会裁切。页面内容仍可滚动和操作。")) {
-                PhotosPicker(selection: $pickerItem, matching: .images) {
+                PhotosPicker(selection: $pickerItem, matching: .images, preferredItemEncoding: .current) {
                     Label(wallpaperFilename.isEmpty ? "从相册选择壁纸" : "更换壁纸", systemImage: "photo.on.rectangle")
                 }
-                .preferredItemEncoding(.current)
                 if !wallpaperFilename.isEmpty {
                     Button(role: .destructive) {
                         WallpaperStore.delete(filename: wallpaperFilename)
