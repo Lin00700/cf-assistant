@@ -147,6 +147,22 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         monitor = nil
     }
 
+    /// Tun address is 172.19.0.1/30. The other host, 172.19.0.2, is where sing-box hijacks DNS.
+    private static let tunDNS = "172.19.0.2"
+    private static let publicResolvers: Set<String> = [
+        "8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1",
+        "223.5.5.5", "223.6.6.6", "119.29.29.29", "114.114.114.114"
+    ]
+
+    static func nednsServer(libbox: String) -> String {
+        let host = libbox.split(separator: "%").first.map(String.init) ?? ""
+        if host == tunDNS { return host }
+        if host.hasPrefix("172.19.0."), host != "172.19.0.1", !publicResolvers.contains(host) {
+            return host
+        }
+        return tunDNS
+    }
+
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws {
         guard let options, let ret0_ else {
             throw NSError(domain: "CFTunnel", code: 3, userInfo: [NSLocalizedDescriptionKey: "TUN 参数为空"])
@@ -155,22 +171,18 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        // Libbox 1.11 exposes the TUN DNS-hijack address as a single StringBox.
-        // Send system DNS there so sing-box can apply its DNS rules.
-        var dnsServers: [String] = []
-        if let dnsServer = try? options.getDNSServerAddress().value,
-           !dnsServer.isEmpty {
-            dnsServers = [dnsServer]
-        }
-        if !dnsServers.isEmpty {
-            let dnsSettings = NEDNSSettings(servers: dnsServers)
-            dnsSettings.matchDomains = [""]
-            dnsSettings.matchDomainsNoSearch = true
-            settings.dnsSettings = dnsSettings
-            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServers.joined(separator: ","))")
-        } else {
-            TunnelLog.shared.add("[ext] Libbox DNS address unavailable")
-        }
+        // System DNS must be the tun peer (172.19.0.1/30 → 172.19.0.2) so packets
+        // enter the utun and sing-box's hijack-dns rule handles them.
+        // A public resolver here (8.8.8.8 / 223.5.5.5) is excluded from the tun
+        // and the lookups time out.
+        let libboxDNS = (try? options.getDNSServerAddress().value)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let dnsServer = Self.nednsServer(libbox: libboxDNS)
+        let dnsSettings = NEDNSSettings(servers: [dnsServer])
+        dnsSettings.matchDomains = [""]
+        dnsSettings.matchDomainsNoSearch = true
+        settings.dnsSettings = dnsSettings
+        TunnelLog.shared.add("[ext] NEDNSSettings \(dnsServer) libbox=\(libboxDNS.isEmpty ? "empty" : libboxDNS)")
 
         var v4Addr: [String] = []
         var v4Mask: [String] = []
