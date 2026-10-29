@@ -230,26 +230,23 @@ enum SingBoxConfig {
             }
         }
 
-        // Some mobile networks time out UDP/53 while allowing direct TCP/443.
-        // Use the literal Cloudflare IP to avoid a DNS bootstrap loop; keep this
-        // resolver on the direct outbound for local/domestic DNS rules.
-        // Exclude the DoH endpoint as a /32 so it cannot be re-injected into TUN
-        // if IP_BOUND_IF binding fails. Other traffic to 1.1.1.1 also bypasses VPN.
+        // Old-DNS comparison only: retain the current core/XHTTP and modern schema.
+        // Local/bootstrap DNS uses the historical direct UDP resolver; other DNS
+        // follows dns-remote through the proxy. Keep the current DNS hijack fixes.
         let dnsServers: [[String: Any]] = [
-            ["type": "https", "tag": "dns-local", "server": "1.1.1.1", "server_port": 443,
-             "path": "/dns-query", "detour": "direct"],
+            ["type": "udp", "tag": "dns-local", "server": "223.5.5.5", "server_port": 53, "detour": "direct"],
             ["type": "udp", "tag": "dns-backup", "server": "8.8.8.8", "server_port": 53, "detour": "direct"],
             ["type": "tls", "tag": "dns-remote", "server": "8.8.8.8", "server_port": 853, "detour": "proxy"]
         ]
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
-            "final": "dns-local",
+            "final": "dns-remote",
             "strategy": "prefer_ipv4"
         ]
 
         var tunExcludes: [String] = nodeIPs
-        tunExcludes.append(contentsOf: ["1.1.1.1/32", "223.5.5.5/32", "8.8.8.8/32"])
+        tunExcludes.append(contentsOf: ["223.5.5.5/32", "8.8.8.8/32"])
         var tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],
@@ -266,7 +263,7 @@ enum SingBoxConfig {
             "rules": routeRules,
             "final": "proxy",
             "default_domain_resolver": "dns-local",
-            "auto_detect_interface": true
+            "auto_detect_interface": false
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]

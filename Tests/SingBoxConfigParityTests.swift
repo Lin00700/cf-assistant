@@ -1,7 +1,7 @@
 import XCTest
 @testable import CFAssistant
 
-/// VLESS+WS+TLS 出站、大陆直连后缀、dns.final=dns-local，以及系统 DNS 必须在
+/// VLESS+WS+TLS 出站、旧版 UDP DNS/远端最终解析，以及系统 DNS 必须在
 /// ip_is_private 之前被劫持。不引用本地 geo 文件。
 final class SingBoxConfigParityTests: XCTestCase {
     func testVLESSWebSocketTLSWithBypassCNMatchesMainShape() throws {
@@ -49,14 +49,15 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertEqual(headers["Host"] as? String, "example.com")
 
         let dns = try XCTUnwrap(root["dns"] as? [String: Any])
-        XCTAssertEqual(dns["final"] as? String, "dns-local")
+        XCTAssertEqual(dns["final"] as? String, "dns-remote")
         let servers = try XCTUnwrap(dns["servers"] as? [[String: Any]])
-        XCTAssertTrue(servers.contains { $0["type"] as? String == "https" && $0["server"] as? String == "1.1.1.1" && $0["path"] as? String == "/dns-query" && $0["detour"] as? String == "direct" })
+        XCTAssertTrue(servers.contains { $0["tag"] as? String == "dns-local" && $0["type"] as? String == "udp" && $0["server"] as? String == "223.5.5.5" && $0["server_port"] as? Int == 53 && $0["detour"] as? String == "direct" })
         XCTAssertTrue(servers.contains { $0["type"] as? String == "tls" && $0["server"] as? String == "8.8.8.8" && $0["detour"] as? String == "proxy" })
 
         let route = try XCTUnwrap(root["route"] as? [String: Any])
         XCTAssertEqual(route["final"] as? String, "proxy")
-        XCTAssertEqual(route["auto_detect_interface"] as? Bool, true)
+        XCTAssertEqual(route["auto_detect_interface"] as? Bool, false)
+        XCTAssertEqual(route["default_domain_resolver"] as? String, "dns-local")
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
         let cn = try XCTUnwrap(rules.first { ($0["domain_suffix"] as? [String])?.contains("baidu.com") == true })
         XCTAssertEqual(cn["outbound"] as? String, "direct")
@@ -75,7 +76,7 @@ final class SingBoxConfigParityTests: XCTestCase {
         let tun = try XCTUnwrap((root["inbounds"] as? [[String: Any]])?.first)
         let exclude = try XCTUnwrap(tun["route_exclude_address"] as? [String])
         XCTAssertTrue(exclude.contains("104.17.51.244/32"))
-        XCTAssertTrue(exclude.contains("1.1.1.1/32"))
+        XCTAssertFalse(exclude.contains("1.1.1.1/32"))
         XCTAssertTrue(exclude.contains("223.5.5.5/32"))
         XCTAssertTrue(exclude.contains("8.8.8.8/32"))
 
