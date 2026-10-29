@@ -32,6 +32,7 @@ struct ProxyHomeView: View {
             Section {
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
+                NavigationLink("sing-box 配置") { SingBoxConfigDebugView() }
             }
             ProxyNodeSections(selecting: $selecting, checked: $checked) { ids in
                 pendingIDs = Array(ids)
@@ -331,10 +332,27 @@ struct NodeEditView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var node: ProxyNode
     @State private var portText: String
+    /// Empty means “keep the imported value”, including no method at all.
+    /// The picker must not substitute aes-128-gcm, or a save rewrites the cipher.
+    @State private var method: String
+    private let original: ProxyNode
+
+    private static let ssMethods = [
+        "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305",
+        "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305"
+    ]
 
     init(node: ProxyNode) {
+        original = node
         _node = State(initialValue: node)
         _portText = State(initialValue: String(node.port))
+        _method = State(initialValue: node.params["method"] ?? "")
+    }
+
+    private var methodChoices: [String] {
+        var list = Self.ssMethods
+        if !method.isEmpty && !list.contains(method) { list.insert(method, at: 0) }
+        return list
     }
 
     var body: some View {
@@ -348,20 +366,21 @@ struct NodeEditView: View {
                     TextField(node.proto == "vless" || node.proto == "vmess" ? "UUID" : "密码", text: $node.secret)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     if node.proto == "ss" {
-                        Picker("加密方式", selection: Binding(
-                            get: { node.params["method"] ?? "aes-128-gcm" },
-                            set: { node.params["method"] = $0 }
-                        )) {
-                            Text("aes-128-gcm").tag("aes-128-gcm")
-                            Text("aes-256-gcm").tag("aes-256-gcm")
-                            Text("chacha20-ietf-poly1305").tag("chacha20-ietf-poly1305")
-                            Text("2022-blake3-aes-128-gcm").tag("2022-blake3-aes-128-gcm")
-                            Text("2022-blake3-aes-256-gcm").tag("2022-blake3-aes-256-gcm")
+                        Picker("加密方式", selection: $method) {
+                            Text("沿用导入").tag("")
+                            ForEach(methodChoices, id: \.self) { item in
+                                Text(item).tag(item)
+                            }
                         }
                     }
                 }
-                Section(footer: Text("加密方式必须与服务器一致。")) {
+                Section(footer: Text("加密方式必须与服务器一致。未改过的字段仍按导入链接生成出站。")) {
                     Text(node.detail).font(.footnote).foregroundColor(.secondary)
+                    if node.proto != "ss" {
+                        Text(cipherSummary)
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .navigationTitle("编辑节点")
@@ -369,14 +388,70 @@ struct NodeEditView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        var next = node
-                        next.port = Int(portText) ?? next.port
-                        next.raw = ""
-                        store.update(next)
-                        Task { await VPNManager.shared.restartIfActive(store: store) }
-                        dismiss()
-                    }
+                    Button("保存") { save() }
+                }
+            }
+        }
+    }
+
+    private var cipherSummary: String {
+        let security = node.p("security") ?? node.p("tls") ?? "-"
+        let flow = node.p("flow") ?? "-"
+        let sni = node.p("sni") ?? node.p("peer") ?? node.p("host") ?? "-"
+        let transport = node.p("type") ?? node.p("net") ?? "tcp"
+        let path = node.p("path") ?? node.p("serviceName") ?? "-"
+        return "security \(security)  flow \(flow)  sni \(sni)  transport \(transport)  path \(path)"
+    }
+
+    private func save() {
+        var next = node
+        next.port = Int(portText) ?? next.port
+        if next.proto == "ss" {
+            if method.isEmpty {
+                next.params.removeValue(forKey: "method")
+            } else {
+                next.params["method"] = method
+            }
+        }
+        let sameLink = next.server == original.server && next.port == original.port
+            && next.secret == original.secret && next.params == original.params
+        if !sameLink { next.raw = "" }
+        store.update(next)
+        Task { await VPNManager.shared.restartIfActive(store: store) }
+        dismiss()
+    }
+}
+
+struct SingBoxConfigDebugView: View {
+    @ObservedObject private var store = ProxyStore.shared
+    @State private var copied = false
+
+    private var json: String {
+        let raw = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
+                                      mode: store.selectionMode, bypassCN: store.bypassCN,
+                                      rules: store.routingRules,
+                                      categoryPolicies: store.categoryPolicies)
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data),
+              let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+              let text = String(data: pretty, encoding: .utf8) else { return raw }
+        return text
+    }
+
+    var body: some View {
+        ScrollView {
+            Text(json)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+        }
+        .navigationTitle("sing-box 配置")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(copied ? "已复制" : "复制") {
+                    UIPasteboard.general.string = json
+                    copied = true
                 }
             }
         }
