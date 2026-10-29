@@ -1,8 +1,8 @@
-name: Build IPA with VPN
+name: Build Full CF Assistant XHTTP Test IPA
 
 on:
   push:
-    branches: [ main, 'cursor/**' ]
+    branches: [ main, 'cursor/**', 'test/**' ]
   workflow_dispatch:
 
 concurrency:
@@ -17,21 +17,37 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.26.10'
 
-      - name: Build Libbox (sing-box 1.11 series)
+      - name: Build Libbox (pinned sing-box-lx with XHTTP)
         run: |
-          TAG=$(git ls-remote --tags --refs https://github.com/SagerNet/sing-box.git 'refs/tags/v1.11.*' | awk -F/ '{print $3}' | grep -E '^v1\.11\.[0-9]+$' | sort -V | tail -1)
-          echo "sing-box tag: $TAG"
-          git clone --depth 1 --branch "$TAG" https://github.com/SagerNet/sing-box.git "$RUNNER_TEMP/sing-box"
-          cd "$RUNNER_TEMP/sing-box"
-          GM=$(grep 'sagernet/gomobile' go.mod | head -1 | awk '{print $2}')
-          GM=${GM:-v0.1.4}
+          set -euo pipefail
+          REF=v1.14.4-lx.25
+          COMMIT=d0e2a15ee71f53469dd98f3c63b1e0ba7c3b678c
+          git clone --depth 1 --recurse-submodules --branch "$REF" \
+            https://github.com/Leadaxe/sing-box-lx.git "$RUNNER_TEMP/sing-box-lx"
+          cd "$RUNNER_TEMP/sing-box-lx"
+          git checkout --detach "$COMMIT"
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          git submodule update --init --recursive
+          GM=$(grep -E '^[[:space:]]*github.com/sagernet/gomobile[[:space:]]' go.mod | head -1 | awk '{print $2}')
+          test -n "$GM"
           echo "gomobile: $GM"
-          go install -v github.com/sagernet/gomobile/cmd/gomobile@$GM
-          go install -v github.com/sagernet/gomobile/cmd/gobind@$GM
+          go install -v github.com/sagernet/gomobile/cmd/gomobile@"$GM"
+          go install -v github.com/sagernet/gomobile/cmd/gobind@"$GM"
           export PATH="$PATH:$(go env GOPATH)/bin"
-          (go run ./cmd/internal/build_libbox -target apple -platform ios || go run ./cmd/internal/build_libbox -target apple)
+          # The mobile default omits the Clash API, but CF Assistant uses it for node latency checks.
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("cmd/internal/build_libbox/main.go")
+          source = path.read_text()
+          needle = 'sharedTags = append(sharedTags, "with_xhttp", "with_awg")'
+          if needle not in source:
+              raise SystemExit("Expected XHTTP mobile build tags were not found")
+          source = source.replace(needle, needle + '\n\tsharedTags = append(sharedTags, "with_clash_api")', 1)
+          path.write_text(source)
+          PY
+          go run ./cmd/internal/build_libbox -target apple -platform ios
           ls -d Libbox.xcframework
           mv Libbox.xcframework "$GITHUB_WORKSPACE/"
 
@@ -41,14 +57,40 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate --spec project-vpn.yml
 
-      - name: Validate generated sing-box DNS configuration
+      - name: Validate VLESS XHTTP import and sing-box configuration
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/main.swift" <<'SWIFT'
           import Foundation
-          let node = ProxyNode(name: "config-check", proto: "ss", server: "192.0.2.1", port: 443,
-                               secret: "test-only", params: ["method": "aes-128-gcm"])
-          let text = SingBoxConfig.build(nodes: [node], selectedID: node.id, mode: .manual,
+
+          let uuid = "11111111-1111-1111-1111-111111111111"
+          let authority = ":\(uuid)@xhttp.example.com:443"
+          let encodedAuthority = Data(authority.utf8).base64EncodedString()
+          let obfsJSON = #"{"outer":{"xPaddingMethod":"tokenish","xPaddingHeader":"X-Padding","xPaddingObfsMode":true,"xPaddingKey":"padding"},"Host":"xhttp.example.com"}"#
+          let querySafe = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+          let encodedObfs = obfsJSON.addingPercentEncoding(withAllowedCharacters: querySafe)!
+          let link = "vless://\(encodedAuthority)?path=%2Fproduct%3Fed%3D2560&remarks=ignored&obfsParam=\(encodedObfs)&Host=xhttp.example.com&obfs=xhttp&tls=1&peer=xhttp.example.com&udp=1&mode=stream-one"
+          guard let imported = LinkParser.parse(link) else { fatalError("Synthetic VLESS XHTTP link did not parse") }
+          precondition(imported.name == encodedAuthority)
+          precondition(imported.server == "xhttp.example.com" && imported.port == 443 && imported.secret == uuid)
+          precondition(imported.p("type") == "xhttp" && imported.p("security") == "tls")
+          precondition(imported.p("sni") == "xhttp.example.com" && imported.p("host") == "xhttp.example.com")
+          precondition(imported.p("mode") == "stream-one" && imported.p("path") == "/product?ed=2560")
+          precondition(imported.p("x_padding_obfs_mode") == "true")
+          precondition(imported.p("x_padding_key") == "padding" && imported.p("x_padding_header") == "X-Padding")
+          precondition(imported.p("x_padding_method") == "tokenish")
+
+          let oldSavedNode = ProxyNode(name: "xhttp.example.com", proto: "vless", server: "xhttp.example.com",
+                                      port: 443, secret: uuid, params: [:], raw: link)
+          let migrated = LinkParser.normalized(oldSavedNode)
+          precondition(migrated.name == encodedAuthority && migrated.p("type") == "xhttp")
+
+          let legacyWS = LinkParser.parse("vless://\(uuid)@legacy.example.com:443?security=tls&type=ws&host=legacy.example.com&path=%2Fws#Existing")!
+          precondition(legacyWS.name == "Existing" && legacyWS.p("type") == "ws")
+
+          let ssNode = ProxyNode(name: "config-check", proto: "ss", server: "192.0.2.1", port: 443,
+                                 secret: "test-only", params: ["method": "aes-128-gcm"])
+          let text = SingBoxConfig.build(nodes: [ssNode, imported, legacyWS], selectedID: ssNode.id, mode: .manual,
                                          bypassCN: true, rules: [])
           let root = try JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any]
           let dns = root["dns"] as! [String: Any]
@@ -67,13 +109,22 @@ jobs:
           let excludes = tun["inet4_route_exclude_address"] as! [String]
           precondition(excludes.contains("192.0.2.1/32") && !excludes.contains("1.1.1.1/32"))
           let outbounds = root["outbounds"] as! [[String: Any]]
-          precondition(outbounds.contains { $0["type"] as? String == "shadowsocks" && $0["server"] as? String == node.server && $0["server_port"] as? Int == node.port && $0["password"] as? String == node.secret })
+          precondition(outbounds.contains { $0["type"] as? String == "shadowsocks" && $0["server"] as? String == ssNode.server && $0["server_port"] as? Int == ssNode.port && $0["password"] as? String == ssNode.secret })
+          let xhttp = outbounds.first { $0["server"] as? String == "xhttp.example.com" }!
+          let tls = xhttp["tls"] as! [String: Any]
+          precondition(tls["enabled"] as? Bool == true && tls["server_name"] as? String == "xhttp.example.com")
+          let transport = xhttp["transport"] as! [String: Any]
+          precondition(transport["type"] as? String == "xhttp" && transport["mode"] as? String == "stream-one")
+          precondition(transport["path"] as? String == "/product?ed=2560" && transport["host"] as? String == "xhttp.example.com")
+          precondition(transport["x_padding_obfs_mode"] as? Bool == true)
+          precondition(transport["x_padding_key"] as? String == "padding" && transport["x_padding_header"] as? String == "X-Padding")
+          precondition(transport["x_padding_method"] as? String == "tokenish")
           FileHandle.standardOutput.write(Data(text.utf8))
           SWIFT
           swiftc ProxyNodes.swift SingBoxConfig.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/config-check"
-          "$RUNNER_TEMP/config-check" > "$RUNNER_TEMP/sing-box-dns-check.json"
-          cd "$RUNNER_TEMP/sing-box"
-          go run -tags with_clash_api ./cmd/sing-box check -c "$RUNNER_TEMP/sing-box-dns-check.json"
+          "$RUNNER_TEMP/config-check" > "$RUNNER_TEMP/sing-box-xhttp-check.json"
+          cd "$RUNNER_TEMP/sing-box-lx"
+          go run -tags with_clash_api,with_xhttp ./cmd/sing-box check -c "$RUNNER_TEMP/sing-box-xhttp-check.json"
 
       - name: Build and Archive
         run: |
@@ -94,9 +145,9 @@ jobs:
         run: |
           mkdir Payload
           cp -r build/App.xcarchive/Products/Applications/*.app Payload/
-          zip -qry CFAssistant-VPN.ipa Payload
+          zip -qry CFAssistant-Full-XHTTP-Test.ipa Payload
 
       - uses: actions/upload-artifact@v4
         with:
-          name: CFAssistant-VPN-IPA
-          path: CFAssistant-VPN.ipa
+          name: CFAssistant-Full-XHTTP-Test
+          path: CFAssistant-Full-XHTTP-Test.ipa
