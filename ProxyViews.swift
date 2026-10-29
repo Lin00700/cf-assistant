@@ -58,7 +58,7 @@ struct ProxyHomeView: View {
         }
         .scrollContentBackground(.hidden)
         .listStyle(.insetGrouped)
-        .background(Color(red: 0.92, green: 0.91, blue: 0.94).ignoresSafeArea())
+        .background(InkTheme.paperGradient.ignoresSafeArea())
         .navigationTitle("VPN 与节点")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
