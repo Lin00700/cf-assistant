@@ -1,91 +1,68 @@
-name: Build Full CF Assistant XHTTP Test IPA
-
+name: Build Legacy sing-box 1.11.15 Test IPA
 on:
   push:
-    branches: [ main, 'cursor/**', 'test/**' ]
+    branches: [test/legacy-singbox-1.11]
   workflow_dispatch:
-
 concurrency:
-  group: ipa-vpn-${{ github.ref }}
+  group: legacy-singbox-1.11-ipa
   cancel-in-progress: true
-
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.10'
-
+          go-version: '1.23'
+          cache: false
       - uses: actions/cache/restore@v4
         id: libbox-cache
         with:
           path: Libbox.xcframework
-          key: libbox-lx-d0e2a15-ios-xhttp-clash-v1
-
-      - name: Build Libbox (pinned sing-box-lx with XHTTP)
+          key: libbox-sagernet-v1.11.15-bc35aca-ios-clash-v1
+      - name: Build Libbox (official sing-box v1.11.15)
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          REF=v1.14.4-lx.25
-          COMMIT=d0e2a15ee71f53469dd98f3c63b1e0ba7c3b678c
-          git clone --depth 1 --recurse-submodules --branch "$REF" \
-            https://github.com/Leadaxe/sing-box-lx.git "$RUNNER_TEMP/sing-box-lx"
-          cd "$RUNNER_TEMP/sing-box-lx"
+          REF=v1.11.15
+          COMMIT=bc35aca01704497c179da1a03e45ad8e32f1a51b
+          SRC="$RUNNER_TEMP/sing-box-legacy"
+          git clone --depth 1 --branch "$REF" https://github.com/SagerNet/sing-box.git "$SRC"
+          cd "$SRC"
           git checkout --detach "$COMMIT"
           test "$(git rev-parse HEAD)" = "$COMMIT"
-          git submodule update --init --recursive
-          GM=$(grep -E '^[[:space:]]*github.com/sagernet/gomobile[[:space:]]' go.mod | head -1 | awk '{print $2}')
-          test -n "$GM"
-          go install -v github.com/sagernet/gomobile/cmd/gomobile@"$GM"
-          go install -v github.com/sagernet/gomobile/cmd/gobind@"$GM"
+          GM=v0.1.4
+          go install -v "github.com/sagernet/gomobile/cmd/gomobile@$GM"
+          go install -v "github.com/sagernet/gomobile/cmd/gobind@$GM"
           export PATH="$PATH:$(go env GOPATH)/bin"
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path("cmd/internal/build_libbox/main.go")
-          source = path.read_text()
-          needle = 'sharedTags = append(sharedTags, "with_xhttp", "with_awg")'
-          if needle not in source:
-              raise SystemExit("Expected XHTTP mobile build tags were not found")
-          source = source.replace(needle, needle + '\n\tsharedTags = append(sharedTags, "with_clash_api")', 1)
-          path.write_text(source)
-          PY
           go run ./cmd/internal/build_libbox -target apple -platform ios
+          test -d Libbox.xcframework
           mv Libbox.xcframework "$GITHUB_WORKSPACE/"
-
       - uses: actions/cache/save@v4
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         with:
           path: Libbox.xcframework
-          key: libbox-lx-d0e2a15-ios-xhttp-clash-v1
-
+          key: libbox-sagernet-v1.11.15-bc35aca-ios-clash-v1
       - name: Install XcodeGen
         run: brew install xcodegen
-
       - name: Generate Xcode project
         run: xcodegen generate --spec project-vpn.yml
-
-      - name: Validate VLESS XHTTP import and sing-box configuration
+      - name: Validate legacy config and XHTTP import behavior
         run: |
           set -euo pipefail
-          cp Scripts/SingBoxConfigXHTTPCheck.swift "$RUNNER_TEMP/main.swift"
-          swiftc ProxyNodes.swift SingBoxConfig.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/config-check"
-          "$RUNNER_TEMP/config-check" > "$RUNNER_TEMP/sing-box-xhttp-check.json"
-          if [ ! -d "$RUNNER_TEMP/sing-box-lx" ]; then
-            git clone --depth 1 --recurse-submodules --branch v1.14.4-lx.25 https://github.com/Leadaxe/sing-box-lx.git "$RUNNER_TEMP/sing-box-lx"
+          cp Scripts/SingBoxLegacyConfigCheck.swift "$RUNNER_TEMP/main.swift"
+          swiftc ProxyNodes.swift SingBoxConfig.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/legacy-config-check"
+          "$RUNNER_TEMP/legacy-config-check" > "$RUNNER_TEMP/sing-box-1.11-check.json"
+          SRC="$RUNNER_TEMP/sing-box-legacy"
+          if [ ! -d "$SRC/.git" ]; then
+            git clone --depth 1 --branch v1.11.15 https://github.com/SagerNet/sing-box.git "$SRC"
           fi
-          cd "$RUNNER_TEMP/sing-box-lx"
-          test "$(git rev-parse HEAD)" = d0e2a15ee71f53469dd98f3c63b1e0ba7c3b678c
-          go run -tags with_clash_api,with_xhttp ./cmd/sing-box check -c "$RUNNER_TEMP/sing-box-xhttp-check.json"
-
+          cd "$SRC"
+          git checkout --detach bc35aca01704497c179da1a03e45ad8e32f1a51b
+          test "$(git rev-parse HEAD)" = bc35aca01704497c179da1a03e45ad8e32f1a51b
+          go run -tags with_clash_api ./cmd/sing-box check -c "$RUNNER_TEMP/sing-box-1.11-check.json"
       - name: Build and Archive
-        run: |
-          xcodebuild archive -project CFAssistant.xcodeproj -scheme CFAssistant -sdk iphoneos \
-            -archivePath build/App.xcarchive \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
-
+        run: xcodebuild archive -project CFAssistant.xcodeproj -scheme CFAssistant -sdk iphoneos -archivePath build/App.xcarchive CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
       - name: Embed entitlements (ad-hoc, re-signer keeps them)
         run: |
           APP=$(ls -d build/App.xcarchive/Products/Applications/*.app)
@@ -94,14 +71,12 @@ jobs:
             codesign -f -s - --entitlements CFControl.entitlements "$APP/PlugIns/CFControl.appex"
           fi
           codesign -f -s - --entitlements CFAssistant.entitlements "$APP"
-
       - name: Package into IPA
         run: |
           mkdir Payload
           cp -r build/App.xcarchive/Products/Applications/*.app Payload/
-          zip -qry CFAssistant-Full-XHTTP-Test.ipa Payload
-
+          zip -qry CFAssistant-SingBox-1.11.15-Legacy-Test.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
-          name: CFAssistant-Full-XHTTP-Test
-          path: CFAssistant-Full-XHTTP-Test.ipa
+          name: CFAssistant-SingBox-1.11.15-Legacy-Test
+          path: CFAssistant-SingBox-1.11.15-Legacy-Test.ipa
