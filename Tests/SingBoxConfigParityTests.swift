@@ -49,7 +49,7 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertEqual(headers["Host"] as? String, "example.com")
 
         let dns = try XCTUnwrap(root["dns"] as? [String: Any])
-        XCTAssertEqual(dns["final"] as? String, "dns-remote")
+        XCTAssertEqual(dns["final"] as? String, "dns-local")
         let servers = try XCTUnwrap(dns["servers"] as? [[String: Any]])
         XCTAssertTrue(servers.contains { $0["address"] as? String == "udp://223.5.5.5" && $0["detour"] as? String == "direct" })
         XCTAssertTrue(servers.contains { $0["address"] as? String == "tls://8.8.8.8" && $0["detour"] as? String == "proxy" })

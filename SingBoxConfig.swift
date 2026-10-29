@@ -218,7 +218,7 @@ enum SingBoxConfig {
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
-            "final": "dns-remote",
+            "final": "dns-local",
             "strategy": "prefer_ipv4",
             "independent_cache": true
         ]
