@@ -51,8 +51,8 @@ final class SingBoxConfigParityTests: XCTestCase {
         let dns = try XCTUnwrap(root["dns"] as? [String: Any])
         XCTAssertEqual(dns["final"] as? String, "dns-local")
         let servers = try XCTUnwrap(dns["servers"] as? [[String: Any]])
-        XCTAssertTrue(servers.contains { $0["address"] as? String == "https://1.1.1.1/dns-query" && $0["detour"] as? String == "direct" })
-        XCTAssertTrue(servers.contains { $0["address"] as? String == "tls://8.8.8.8" && $0["detour"] as? String == "proxy" })
+        XCTAssertTrue(servers.contains { $0["type"] as? String == "https" && $0["server"] as? String == "1.1.1.1" && $0["path"] as? String == "/dns-query" && $0["detour"] as? String == "direct" })
+        XCTAssertTrue(servers.contains { $0["type"] as? String == "tls" && $0["server"] as? String == "8.8.8.8" && $0["detour"] as? String == "proxy" })
 
         let route = try XCTUnwrap(root["route"] as? [String: Any])
         XCTAssertEqual(route["final"] as? String, "proxy")
@@ -73,7 +73,7 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertFalse(rules.contains { ($0["ip_cidr"] as? [String])?.contains("1.1.1.1/32") == true && $0["outbound"] as? String == "direct" })
 
         let tun = try XCTUnwrap((root["inbounds"] as? [[String: Any]])?.first)
-        let exclude = try XCTUnwrap(tun["inet4_route_exclude_address"] as? [String])
+        let exclude = try XCTUnwrap(tun["route_exclude_address"] as? [String])
         XCTAssertTrue(exclude.contains("104.17.51.244/32"))
         XCTAssertTrue(exclude.contains("223.5.5.5/32"))
         XCTAssertTrue(exclude.contains("8.8.8.8/32"))

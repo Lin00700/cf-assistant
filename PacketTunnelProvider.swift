@@ -38,8 +38,9 @@ final class TunnelLog {
 }
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
-    private var service: LibboxBoxService?
+    fileprivate var service: LibboxCommandServer?
     private var platform: TunnelPlatform?
+    fileprivate var activeConfig: String?
 
     override func startTunnel(options: [String: NSObject]?) async throws {
         TunnelLog.shared.clear()
@@ -64,7 +65,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         setup.basePath = base.path
         setup.workingPath = work.path
         setup.tempPath = temp.path
-        setup.isTVOS = false
         var setupErr: NSError?
         LibboxSetup(setup, &setupErr)
         if let setupErr {
@@ -76,21 +76,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         self.platform = platform
 
         var err: NSError?
-        let svc = LibboxNewService(config, platform, &err)
+        let svc = LibboxNewCommandServer(platform, platform, &err)
         if let err {
-            TunnelLog.shared.add("[ext] LibboxNewService 失败: \(err.localizedDescription)")
+            TunnelLog.shared.add("[ext] LibboxNewCommandServer 失败: \(err.localizedDescription)")
             throw err
         }
         guard let svc else {
-            throw NSError(domain: "CFTunnel", code: 2, userInfo: [NSLocalizedDescriptionKey: "sing-box 服务创建失败"])
-        }
-        do {
-            try svc.start()
-        } catch {
-            TunnelLog.shared.add("[ext] svc.start 失败: \(error.localizedDescription)")
-            throw error
+            throw NSError(domain: "CFTunnel", code: 2, userInfo: [NSLocalizedDescriptionKey: "sing-box 命令服务创建失败"])
         }
         service = svc
+        activeConfig = config
+        do {
+            try svc.start()
+            try svc.startOrReloadService(config, options: LibboxOverrideOptions())
+        } catch {
+            TunnelLog.shared.add("[ext] 启动 sing-box 服务失败: \(error.localizedDescription)")
+            service = nil
+            activeConfig = nil
+            svc.close()
+            throw error
+        }
         TunnelLog.shared.add("[ext] sing-box 已启动")
     }
 
@@ -145,22 +150,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func stopTunnel(with reason: NEProviderStopReason) async {
         TunnelLog.shared.add("[ext] stopTunnel reason=\(reason.rawValue)")
-        try? service?.close()
+        if let service {
+            try? service.closeService()
+            try? await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
+            service.close()
+        }
         service = nil
+        activeConfig = nil
         platform?.stopMonitor()
         platform = nil
     }
 }
 
-final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
-    private unowned let tunnel: NEPacketTunnelProvider
+final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCommandServerHandlerProtocol {
+    private unowned let tunnel: PacketTunnelProvider
     private var monitor: NWPathMonitor?
     private let ifaceLock = NSLock()
     private var lastIfaceName: String = ""
     private var lastIfaceIndex: Int32 = -1
     private var loggedBindFailure = false
 
-    init(_ tunnel: NEPacketTunnelProvider) {
+    init(_ tunnel: PacketTunnelProvider) {
         self.tunnel = tunnel
     }
 
@@ -180,13 +190,17 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         // Libbox 1.11 returns the next address after 172.19.0.1/30, which is 172.19.0.2.
         // iOS sends every system lookup there; sing-box hijacks port 53 on that address.
         var dnsServers: [String] = []
-        if let dnsServer = try? options.getDNSServerAddress().value,
-           !dnsServer.isEmpty {
-            dnsServers = [dnsServer]
-            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServer)")
-        } else {
+        if let it = try? options.getDNSServerAddress() {
+            while it.hasNext() {
+                let address = it.next()
+                if !address.isEmpty { dnsServers.append(address) }
+            }
+        }
+        if dnsServers.isEmpty {
             dnsServers = ["172.19.0.2"]
             TunnelLog.shared.add("[ext] Libbox DNS address unavailable, fallback 172.19.0.2")
+        } else {
+            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServers.joined(separator: ","))")
         }
         let dnsSettings = NEDNSSettings(servers: dnsServers)
         dnsSettings.matchDomains = [""]
@@ -332,8 +346,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     }
 
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32,
-                             destinationAddress: String?, destinationPort: Int32,
-                             ret0_: UnsafeMutablePointer<Int32>?) throws {
+                             destinationAddress: String?, destinationPort: Int32) throws -> LibboxConnectionOwner {
         throw NSError(domain: "CFTunnel", code: 5, userInfo: [NSLocalizedDescriptionKey: "unsupported"])
     }
 
@@ -425,4 +438,82 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
     func send(_ notification: LibboxNotification?) throws {}
+    func startNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
+    func closeNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
+    func registerMyInterface(_ name: String?) {}
+
+    func usePlatformShell() -> Bool { false }
+
+    func checkPlatformShell() throws {
+        throw unsupportedPlatformFeature("Platform shell")
+    }
+
+    func openShellSession(_ user: LibboxPlatformUser?, command: String?,
+                          environ: (any LibboxStringIteratorProtocol)?, term: String?,
+                          rows: Int32, cols: Int32) throws -> any LibboxShellSessionProtocol {
+        throw unsupportedPlatformFeature("Platform shell")
+    }
+
+    func readSystemSSHHostKey(_ error: NSErrorPointer) -> String {
+        error?.pointee = unsupportedPlatformFeature("SSH host key") as NSError
+        return ""
+    }
+
+    func lookupSFTPServer(_ error: NSErrorPointer) -> String {
+        error?.pointee = unsupportedPlatformFeature("SFTP server") as NSError
+        return ""
+    }
+
+    func tailscaleHostname() -> String { "" }
+
+    func usePlatformBridge() -> Bool { false }
+
+    func createBridge(_ options: LibboxBridgeOptions?) throws -> any LibboxBridgeSessionProtocol {
+        throw unsupportedPlatformFeature("Platform bridge")
+    }
+
+    func lookupUser(_ username: String?) throws -> LibboxPlatformUser {
+        throw unsupportedPlatformFeature("Platform user lookup")
+    }
+
+    func systemCertificates() -> (any LibboxStringIteratorProtocol)? { nil }
+
+    // This provider's DNS config uses explicit remote transports, not the
+    // platform-local DNS transport. Returning nil keeps libbox's normal local
+    // transport registration in place.
+    func localDNSTransport() -> (any LibboxLocalDNSTransportProtocol)? { nil }
+
+    func serviceStop() throws {
+        try tunnel.service?.closeService()
+        stopMonitor()
+    }
+
+    func serviceReload() throws {
+        guard let config = tunnel.activeConfig, let server = tunnel.service else {
+            throw NSError(domain: "CFTunnel", code: 9, userInfo: [NSLocalizedDescriptionKey: "sing-box 服务尚未启动，无法重载"])
+        }
+        try server.startOrReloadService(config, options: LibboxOverrideOptions())
+    }
+
+    func getSystemProxyStatus() throws -> LibboxSystemProxyStatus {
+        LibboxSystemProxyStatus()
+    }
+
+    func setSystemProxyEnabled(_ isEnabled: Bool) throws {}
+
+    func triggerNativeCrash() throws {
+        throw NSError(domain: "CFTunnel", code: 10, userInfo: [NSLocalizedDescriptionKey: "不支持触发原生崩溃"])
+    }
+
+    func writeDebugMessage(_ message: String?) {
+        TunnelLog.shared.add(message ?? "")
+    }
+
+    func connectSSHAgent(_ ret0_: UnsafeMutablePointer<Int32>?) throws {
+        throw NSError(domain: "CFTunnel", code: 11, userInfo: [NSLocalizedDescriptionKey: "不支持 SSH agent 转发"])
+    }
+
+    private func unsupportedPlatformFeature(_ feature: String) -> NSError {
+        NSError(domain: "CFTunnel", code: 12, userInfo: [NSLocalizedDescriptionKey: "不支持\(feature)"])
+    }
 }

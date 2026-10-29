@@ -10,7 +10,7 @@ targets:
     sources:
       - path: .
         includes: ["*.swift"]
-        excludes: ["PacketTunnelProvider.swift", "CFControl/**"]
+        excludes: ["PacketTunnelProvider.swift", "CFControl/**", "Tests/**", "Scripts/**"]
       - path: Assets.xcassets
     entitlements:
       path: CFAssistant.entitlements

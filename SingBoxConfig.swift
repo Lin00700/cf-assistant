@@ -234,16 +234,16 @@ enum SingBoxConfig {
         // Do not exclude 1.1.1.1 globally: direct sockets are bound to the physical
         // interface by TunnelPlatform, so ordinary app traffic keeps its policy.
         let dnsServers: [[String: Any]] = [
-            ["tag": "dns-local",  "address": "https://1.1.1.1/dns-query", "detour": "direct"],
-            ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
-            ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
+            ["type": "https", "tag": "dns-local", "server": "1.1.1.1", "server_port": 443,
+             "path": "/dns-query", "detour": "direct"],
+            ["type": "udp", "tag": "dns-backup", "server": "8.8.8.8", "server_port": 53, "detour": "direct"],
+            ["type": "tls", "tag": "dns-remote", "server": "8.8.8.8", "server_port": 853, "detour": "proxy"]
         ]
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
             "final": "dns-local",
-            "strategy": "prefer_ipv4",
-            "independent_cache": true
+            "strategy": "prefer_ipv4"
         ]
 
         var tunExcludes: [String] = nodeIPs
@@ -257,12 +257,13 @@ enum SingBoxConfig {
             "stack": "system"
         ]
         if !tunExcludes.isEmpty {
-            tun["inet4_route_exclude_address"] = tunExcludes
+            tun["route_exclude_address"] = tunExcludes
         }
 
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
+            "default_domain_resolver": "dns-local",
             "auto_detect_interface": true
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
