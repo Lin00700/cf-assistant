@@ -104,6 +104,14 @@ struct ProxyHomeView: View {
             await vpn.load()
             await store.refreshLatency(vpnConnected: vpn.isConnected)
         }
+        .onChange(of: vpn.isConnected) { _ in
+            Task {
+                while store.isRefreshing {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+                await store.refreshLatency(vpnConnected: vpn.isConnected)
+            }
+        }
         .onChange(of: vpn.error) { e in
             error = e
         }

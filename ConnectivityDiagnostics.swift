@@ -487,11 +487,11 @@ struct ConnectivityDiagnosticsView: View {
                         Spacer()
                     }
                 }
-                .disabled(!vpn.isConnected || model.isRunning)
+                .disabled(model.isRunning)
             } footer: {
                 Text(vpn.isConnected
                      ? "同时测试系统 DNS、Network.framework 原始 TCP、URLSession HTTPS；另用 sing-box 指定节点直接测试 Cloudflare HTTPS 代理出站。Network.framework 探测不保证与 URLSession 或其他应用走同一路径。节点为域名时，解析节点 IP 仍依赖系统 DNS。"
-                     : "请先在“VPN 与节点”页连接内置 VPN，再运行诊断。")
+                     : "VPN 未连接时也可运行：测试所选节点 TCP 端口、系统 DNS 与直连 HTTPS；sing-box DNS 和代理 HTTPS 项会标明未执行。")
             }
 
             Section("局域网（可选）") {

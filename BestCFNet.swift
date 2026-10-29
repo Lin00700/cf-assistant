@@ -34,7 +34,7 @@ enum BestCFNet {
                 case .ready:
                     let ns = DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds
                     finish(Double(ns) / 1_000_000)
-                case .failed, .cancelled, .waiting:
+                case .failed, .cancelled:
                     finish(nil)
                 default:
                     break
@@ -112,7 +112,7 @@ private final class TLSFetcher {
             if let rs = readSeconds {
                 queue.asyncAfter(deadline: .now() + rs) { [weak self] in self?.finish() }
             }
-        case .failed, .cancelled, .waiting:
+        case .failed, .cancelled:
             finish()
         default:
             break
