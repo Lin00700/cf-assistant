@@ -300,8 +300,18 @@ struct ProxyNodeLatencyRow: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(node.name)
-                Text(node.detail).font(.caption2).foregroundColor(.secondary)
+                    .font(LinkParser.serverLooksLikeBlob(node.name) ? .body.monospaced() : .body)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Text(node.detail)
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
             Spacer()
             if let result {
                 Text(result.label)
@@ -584,27 +594,57 @@ struct ImportNodesView: View {
 
     var body: some View {
         Form {
-            TextEditor(text: $text).frame(minHeight: 100)
-            Button("解析") {
-                Task {
-                    let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    do {
-                        if t.lowercased().hasPrefix("http") {
-                            nodes = try await LinkParser.fetchSubscription(t)
-                        } else {
-                            nodes = LinkParser.parseMany(t)
+            Section {
+                TextEditor(text: $text)
+                    .font(.body.monospaced())
+                    .frame(minHeight: 150)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .accessibilityLabel("节点链接或订阅地址")
+            } footer: {
+                Text("粘贴 VLESS / VMess / Trojan / SS / Hysteria2 链接，或订阅地址。长链接可在框内滚动查看。")
+            }
+            Section {
+                Button("解析") {
+                    nodes = []
+                    error = nil
+                    Task {
+                        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        do {
+                            if t.lowercased().hasPrefix("http") {
+                                nodes = try await LinkParser.fetchSubscription(t)
+                            } else {
+                                nodes = LinkParser.parseMany(t)
+                            }
+                            if nodes.isEmpty { error = "无节点" }
+                        } catch {
+                            self.error = error.localizedDescription
                         }
-                        if nodes.isEmpty { error = "无节点" }
-                    } catch {
-                        self.error = error.localizedDescription
                     }
                 }
             }
             if let error { Text(error).foregroundColor(.red) }
             if !nodes.isEmpty {
-                Button("加入 \(nodes.count) 个") {
-                    store.add(nodes)
-                    dismiss()
+                Section("将导入 \(nodes.count) 个节点") {
+                    ForEach(nodes) { node in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(node.name)
+                                .font(LinkParser.serverLooksLikeBlob(node.name) ? .body.monospaced() : .body)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                            Text(node.detail)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                    Button("加入 \(nodes.count) 个") {
+                        store.add(nodes)
+                        dismiss()
+                    }
                 }
             }
         }

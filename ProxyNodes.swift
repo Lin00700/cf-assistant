@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - 节点模型
 
@@ -178,12 +179,14 @@ enum LinkParser {
     private static func genericURL(_ s: String, proto: String) -> ProxyNode? {
         guard let url = URL(string: s) else { return nil }
         let host = url.host ?? ""
+        if proto == "vless", serverLooksLikeBlob(host) { return nil }
         let port = url.port ?? 443
         let secret = credential(url.user ?? "", proto: proto)
         var params: [String: String] = [:]
         if let items = URLComponents(string: s)?.queryItems {
             for i in items { if let v = i.value { params[i.name] = v } }
         }
+        params = normalizedTransportParams(params, proto: proto)
         let name = url.fragment?.removingPercentEncoding ?? host
         return ProxyNode(name: name.isEmpty ? host : name, proto: proto, server: host,
                          port: port, secret: secret, params: params, raw: s)
@@ -202,8 +205,11 @@ enum LinkParser {
             query = String(body[body.index(after: i)...])
             body = String(body[..<i])
         }
-        if !body.contains("@"), let data = b64(body),
+        let encodedCandidate = body.removingPercentEncoding ?? body
+        var encodedName = ""
+        if !encodedCandidate.contains("@"), let data = b64(encodedCandidate),
            let text = String(data: data, encoding: .utf8), text.contains("@") {
+            encodedName = encodedCandidate
             body = text
             if let i = body.firstIndex(of: "#") {
                 if fragment.isEmpty {
@@ -226,8 +232,9 @@ enum LinkParser {
         var host = String(hostport[..<colon])
         host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         guard serverLooksDialable(host) else { return nil }
-        let params = queryParams(query)
-        let name = fragment.isEmpty ? host : fragment
+        let params = normalizedTransportParams(queryParams(query), proto: proto)
+        let fallbackName = proto == "vless" && !encodedName.isEmpty ? encodedName : host
+        let name = fragment.isEmpty ? fallbackName : fragment
         return ProxyNode(name: name, proto: proto, server: host, port: port,
                          secret: credential(user, proto: proto), params: params, raw: s)
     }
@@ -259,6 +266,72 @@ enum LinkParser {
         return params
     }
 
+    private static func normalizedTransportParams(_ params: [String: String], proto: String) -> [String: String] {
+        guard proto == "vless" else { return params }
+        var result = params
+        func value(_ keys: [String]) -> String? {
+            for key in keys {
+                if let pair = params.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame }), !pair.value.isEmpty {
+                    return pair.value
+                }
+            }
+            return nil
+        }
+
+        if let type = value(["type", "net"]) { result["type"] = type.lowercased() }
+        if let obfs = value(["obfs"]), obfs.lowercased() == "xhttp" { result["type"] = "xhttp" }
+        if let host = value(["host"]) { result["host"] = host }
+        if let sni = value(["sni", "peer", "servername", "server_name"]) { result["sni"] = sni }
+        if let security = value(["security"]) {
+            result["security"] = security.lowercased()
+        } else if let tls = value(["tls"]) {
+            let enabled = ["1", "true", "tls", "yes"].contains(tls.lowercased())
+            result["security"] = enabled ? "tls" : "none"
+        }
+
+        if result["type"] == "xhttp", let raw = value(["obfsParam", "obfs_param"]) {
+            mapXHTTPParameters(raw, into: &result)
+        }
+        return result
+    }
+
+    private static func mapXHTTPParameters(_ raw: String, into params: inout [String: String]) {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+
+        func stringValue(_ value: Any) -> String? {
+            if let string = value as? String { return string }
+            if let number = value as? NSNumber {
+                if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+                return number.stringValue
+            }
+            return nil
+        }
+
+        func visit(_ value: Any) {
+            guard let dictionary = value as? [String: Any] else { return }
+            for (key, child) in dictionary {
+                let compact = key.lowercased().filter { $0.isLetter || $0.isNumber }
+                let target: String?
+                switch compact {
+                case "xpaddingbytes": target = "x_padding_bytes"
+                case "xpaddingobfsmode": target = "x_padding_obfs_mode"
+                case "xpaddingkey": target = "x_padding_key"
+                case "xpaddingheader": target = "x_padding_header"
+                case "xpaddingmethod": target = "x_padding_method"
+                case "xpaddingplacement": target = "x_padding_placement"
+                default: target = nil
+                }
+                if let target, let text = stringValue(child) {
+                    params[target] = text
+                } else if child is [String: Any] {
+                    visit(child)
+                }
+            }
+        }
+        visit(object)
+    }
+
     static func serverLooksDialable(_ host: String) -> Bool {
         if host.isEmpty || host.count > 253 || host.contains(" ") { return false }
         let labels = host.split(separator: ".")
@@ -286,19 +359,18 @@ enum LinkParser {
         } else {
             parsed = nil
         }
-        guard let parsed, serverLooksDialable(parsed.server),
-              parsed.server != node.server || parsed.secret != node.secret || parsed.port != node.port else {
-            return node
-        }
+        guard let parsed, serverLooksDialable(parsed.server) else { return node }
+        var mergedParams = node.params
+        for (key, value) in parsed.params where !value.isEmpty { mergedParams[key] = value }
+        let preserveName = !serverLooksLikeBlob(node.name) && node.name != node.server
+        let desiredName = preserveName ? node.name : parsed.name
+        guard parsed.server != node.server || parsed.secret != node.secret || parsed.port != node.port
+                || desiredName != node.name || mergedParams != node.params else { return node }
         var fixed = parsed
         fixed.id = node.id
         if !node.raw.isEmpty { fixed.raw = node.raw }
-        if !serverLooksLikeBlob(node.name), node.name != node.server {
-            fixed.name = node.name
-        }
-        var params = node.params
-        for (key, value) in parsed.params where !value.isEmpty { params[key] = value }
-        fixed.params = params
+        fixed.name = desiredName
+        fixed.params = mergedParams
         if fixed.secret.isEmpty { fixed.secret = node.secret }
         return fixed
     }

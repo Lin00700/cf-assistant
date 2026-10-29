@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import ImageIO
 
 struct AppBackdropView: View {
     @AppStorage("appearance.wallpaperFilename") private var wallpaperFilename = ""
@@ -16,7 +17,9 @@ struct AppBackdropView: View {
             if let ui = WallpaperStore.load(filename: wallpaperFilename) {
                 Image(uiImage: ui)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .ignoresSafeArea()
                 Color(skin.isDark ? .black : .white).opacity(wallpaperWash).ignoresSafeArea()
             }
@@ -49,8 +52,15 @@ enum WallpaperStore {
     static func load(filename: String) -> UIImage? {
         guard !filename.isEmpty else { return nil }
         let url = dir.appendingPathComponent(filename)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return UIImage(data: data)
+        guard let data = try? Data(contentsOf: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 4096
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
     }
 
     static func delete(filename: String) {
@@ -95,7 +105,7 @@ struct AppearanceSettingsView: View {
                 Text("水墨跟随系统深色模式，米纸和墨色都会保持可读。墨夜固定为深色。强调色是朱砂红。青绿、朱砂、月夜仍然可用。")
             }
 
-            Section(footer: Text("自定义壁纸会显示在所有页面背后。")) {
+            Section(footer: Text("自定义壁纸会按屏幕比例完整显示在页面背后；页面内容仍可滚动和操作。")) {
                 PhotosPicker(selection: $pickerItem, matching: .images) {
                     Label(wallpaperFilename.isEmpty ? "从相册选择壁纸" : "更换壁纸", systemImage: "photo.on.rectangle")
                 }

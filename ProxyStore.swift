@@ -35,6 +35,7 @@ final class ProxyStore: ObservableObject {
             nodes = fixed
             let changed = zip(arr, fixed).contains { old, new in
                 old.server != new.server || old.secret != new.secret || old.port != new.port
+                    || old.name != new.name || old.params != new.params
             }
             if changed { save() }
         }

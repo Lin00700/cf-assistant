@@ -35,6 +35,20 @@ enum SingBoxConfig {
             var t: [String: Any] = ["type": "httpupgrade", "path": n.p("path") ?? "/"]
             if let h = n.p("host") { t["host"] = h }
             return t
+        case "xhttp":
+            var t: [String: Any] = ["type": "xhttp"]
+            if let mode = n.p("mode") { t["mode"] = mode }
+            if let path = n.p("path") { t["path"] = path }
+            if let host = n.p("host") { t["host"] = host }
+            if let bytes = n.p("x_padding_bytes") { t["x_padding_bytes"] = bytes }
+            if let obfsMode = n.p("x_padding_obfs_mode") {
+                t["x_padding_obfs_mode"] = ["1", "true", "yes"].contains(obfsMode.lowercased())
+            }
+            if let key = n.p("x_padding_key") { t["x_padding_key"] = key }
+            if let header = n.p("x_padding_header") { t["x_padding_header"] = header }
+            if let method = n.p("x_padding_method") { t["x_padding_method"] = method }
+            if let placement = n.p("x_padding_placement") { t["x_padding_placement"] = placement }
+            return t
         default:
             return nil
         }
