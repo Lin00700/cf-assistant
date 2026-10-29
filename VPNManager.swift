@@ -78,6 +78,27 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// Resolve cloudflare.com through sing-box inside the extension. Does not use the system resolver.
+    func querySingBoxDNS() async -> String {
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            return "FAIL 无法取得扩展会话"
+        }
+        return await withCheckedContinuation { cont in
+            do {
+                try session.sendProviderMessage(Data("dns".utf8)) { data in
+                    guard let data, let text = String(data: data, encoding: .utf8),
+                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        cont.resume(returning: "FAIL 扩展未返回 sing-box DNS 结果")
+                        return
+                    }
+                    cont.resume(returning: text)
+                }
+            } catch {
+                cont.resume(returning: "FAIL \(error.localizedDescription)")
+            }
+        }
+    }
+
     func fetchLog() async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"

@@ -8,6 +8,7 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
         case dnsA
         case dnsAAAA
+        case singBoxDNS
         case lanTCP
         case nodeTCP
         case proxyHTTPS
@@ -20,6 +21,7 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             switch self {
             case .dnsA: return "DNS · A 记录"
             case .dnsAAAA: return "DNS · AAAA 记录"
+            case .singBoxDNS: return "sing-box DNS · cloudflare.com"
             case .lanTCP: return "局域网 TCP · 手动目标"
             case .nodeTCP: return "节点 TCP · 地址/端口"
             case .proxyHTTPS: return "代理 HTTPS · 指定节点"
@@ -34,13 +36,14 @@ struct ConnectivityProbeResult: Codable, Identifiable, Sendable {
             switch self {
             case .dnsA: return 0
             case .dnsAAAA: return 1
-            case .lanTCP: return 2
-            case .nodeTCP: return 3
-            case .proxyHTTPS: return 4
-            case .tunnelIPTCP: return 5
-            case .ipv4: return 6
-            case .ipv6: return 7
-            case .http: return 8
+            case .singBoxDNS: return 2
+            case .lanTCP: return 3
+            case .nodeTCP: return 4
+            case .proxyHTTPS: return 5
+            case .tunnelIPTCP: return 6
+            case .ipv4: return 7
+            case .ipv6: return 8
+            case .http: return 9
             }
         }
     }
@@ -98,7 +101,7 @@ struct ConnectivityDiagnosticRun: Codable, Identifiable, Sendable {
             "",
             "\(lines.joined(separator: "\n"))",
             "",
-            "说明：DNS 项使用 iOS 系统解析器；节点 TCP、局域网 TCP 和 1.1.1.1:443 使用 Network.framework；IPv4/IPv6 HTTPS 与 Cloudflare HTTP 使用 URLSession，但这些 API 的具体路由可能不同，不能据此断定普通应用流量是否经 TUN。它们不等同于“代理 HTTPS · 指定节点”：后者由 sing-box delay API 指定该节点访问 Cloudflare 探测 URL。该项成功只证明这一节点本次代理 HTTPS 出站成功，不保证系统 DNS、其他应用或局域网可用。若填写了内网目标，局域网 TCP 只测试该 RFC1918 地址和端口；未填写表示未测试，失败也只说明该目标/端口未连通。当前 sing-box 将 RFC1918 私有地址分流为 direct，但实际可达仍取决于本地网络路由、iOS 本地网络权限以及目标服务是否监听。分享前请检查是否要公开内网或节点 IP；公网出口 IP 可能包含在结果中。"
+            "说明：DNS A/AAAA 使用 iOS 系统解析器。sing-box DNS 由扩展进程直接问 sing-box 的 DNS 模块解析 cloudflare.com，不经过系统解析器：它成功而系统 DNS 失败说明劫持没接住；它也失败说明上游或直连不通。节点 TCP、局域网 TCP 和 1.1.1.1:443 使用 Network.framework；IPv4/IPv6 HTTPS 与 Cloudflare HTTP 使用 URLSession，但这些 API 的具体路由可能不同，不能据此断定普通应用流量是否经 TUN。它们不等同于“代理 HTTPS · 指定节点”：后者由 sing-box delay API 指定该节点访问 Cloudflare 探测 URL。该项成功只证明这一节点本次代理 HTTPS 出站成功，不保证系统 DNS、其他应用或局域网可用。若填写了内网目标，局域网 TCP 只测试该 RFC1918 地址和端口；未填写表示未测试，失败也只说明该目标/端口未连通。当前 sing-box 将 RFC1918 私有地址分流为 direct，但实际可达仍取决于本地网络路由、iOS 本地网络权限以及目标服务是否监听。分享前请检查是否要公开内网或节点 IP；公网出口 IP 可能包含在结果中。"
         ].compactMap { $0 }).joined(separator: "\n")
     }
 }
@@ -128,6 +131,31 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
         defer { isRunning = false }
 
         let startedAt = Date()
+        let singBoxDNSTask = Task<ConnectivityProbeResult, Never> { @MainActor in
+            let started = DispatchTime.now().uptimeNanoseconds
+            guard VPNManager.shared.isConnected else {
+                return ConnectivityProbeResult(kind: .singBoxDNS, success: false, elapsedMilliseconds: 0,
+                                               detail: "VPN 未连接，未向扩展内的 sing-box DNS 查询 cloudflare.com")
+            }
+            let text = await VPNManager.shared.querySingBoxDNS()
+            let elapsed = Int((DispatchTime.now().uptimeNanoseconds - started) / 1_000_000)
+            if text.hasPrefix("OK ") {
+                let rest = String(text.dropFirst(3))
+                return ConnectivityProbeResult(
+                    kind: .singBoxDNS,
+                    success: true,
+                    elapsedMilliseconds: elapsed,
+                    detail: "扩展内 sing-box 直接解析 cloudflare.com 成功 · \(rest)。这条不经过系统 DNS"
+                )
+            }
+            let rest = text.hasPrefix("FAIL ") ? String(text.dropFirst(5)) : text
+            return ConnectivityProbeResult(
+                kind: .singBoxDNS,
+                success: false,
+                elapsedMilliseconds: elapsed,
+                detail: "扩展内 sing-box 直接解析 cloudflare.com 失败 · \(rest)。这条不经过系统 DNS，失败说明上游或直连不通"
+            )
+        }
         let proxyProbeTask = Task<ConnectivityProbeResult, Never> { @MainActor in
             let probeStartedAt = DispatchTime.now().uptimeNanoseconds
             guard let node else {
@@ -182,6 +210,7 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
 
             var completed: [ConnectivityProbeResult] = []
             for await result in group { completed.append(result) }
+            completed.append(await singBoxDNSTask.value)
             completed.append(await proxyProbeTask.value)
             return completed.sorted { $0.kind.displayOrder < $1.kind.displayOrder }
         }

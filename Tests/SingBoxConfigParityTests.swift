@@ -1,8 +1,8 @@
 import XCTest
 @testable import CFAssistant
 
-/// 同一组输入下，生成的 sing-box JSON 必须和 main（ace3242）的生成器一致：
-/// VLESS+WS+TLS 出站字段、大陆直连后缀、DNS/路由 final、以及不引用本地 geo 文件。
+/// VLESS+WS+TLS 出站、大陆直连后缀、dns.final=dns-local，以及系统 DNS 必须在
+/// ip_is_private 之前被劫持。不引用本地 geo 文件。
 final class SingBoxConfigParityTests: XCTestCase {
     func testVLESSWebSocketTLSWithBypassCNMatchesMainShape() throws {
         let id = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
@@ -56,9 +56,20 @@ final class SingBoxConfigParityTests: XCTestCase {
 
         let route = try XCTUnwrap(root["route"] as? [String: Any])
         XCTAssertEqual(route["final"] as? String, "proxy")
+        XCTAssertEqual(route["auto_detect_interface"] as? Bool, true)
         let rules = try XCTUnwrap(route["rules"] as? [[String: Any]])
         let cn = try XCTUnwrap(rules.first { ($0["domain_suffix"] as? [String])?.contains("baidu.com") == true })
         XCTAssertEqual(cn["outbound"] as? String, "direct")
+        let sniff = try XCTUnwrap(rules.first { $0["action"] as? String == "sniff" })
+        let sniffers = try XCTUnwrap(sniff["sniffer"] as? [String])
+        XCTAssertTrue(sniffers.contains("dns"))
+        let hijackIndex = try XCTUnwrap(rules.firstIndex { $0["action"] as? String == "hijack-dns" && $0["port"] as? Int == 53 })
+        let privateIndex = try XCTUnwrap(rules.firstIndex { $0["ip_is_private"] as? Bool == true })
+        XCTAssertLessThan(hijackIndex, privateIndex)
+        let tunDNS = try XCTUnwrap(rules.first { ($0["ip_cidr"] as? [String])?.contains("172.19.0.2/32") == true })
+        XCTAssertEqual(tunDNS["action"] as? String, "hijack-dns")
+        let upstream = try XCTUnwrap(rules.first { ($0["ip_cidr"] as? [String])?.contains("223.5.5.5/32") == true && $0["outbound"] as? String == "direct" })
+        XCTAssertEqual(upstream["outbound"] as? String, "direct")
 
         let tun = try XCTUnwrap((root["inbounds"] as? [[String: Any]])?.first)
         let exclude = try XCTUnwrap(tun["inet4_route_exclude_address"] as? [String])
