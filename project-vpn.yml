@@ -53,6 +53,7 @@ targets:
     dependencies:
       - framework: Libbox.xcframework
         embed: false
+      - sdk: UIKit.framework
     info:
       path: CFTunnel-Info.plist
       properties:
