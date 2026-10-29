@@ -115,6 +115,18 @@ final class VPNManager: ObservableObject {
                     error = "请先添加并选择一个可用节点"
                     return
                 }
+                store.normalizeDecodedNodes()
+                if store.selectionMode == .manual, let node = store.selected {
+                    let title = node.name.count > 24 ? String(node.name.prefix(24)) + "…" : node.name
+                    if !LinkParser.serverLooksDialable(node.server) {
+                        error = "当前节点「\(title)」的地址无法识别，不能连接。请改选 TCP 已测通的节点。"
+                        return
+                    }
+                    if store.results[node.id] == .unreachable {
+                        error = "当前节点「\(title)」不可用，已取消连接。请改选延迟正常的节点（例如已测通的 Shadowsocks）后再打开 VPN。"
+                        return
+                    }
+                }
                 guard let extID = extensionBundleID else {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return

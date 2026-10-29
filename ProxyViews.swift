@@ -32,7 +32,7 @@ struct ProxyHomeView: View {
             Section {
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
-                NavigationLink("隧道调试") { TunnelDebugView() }
+                NavigationLink("sing-box 配置") { TunnelDebugView() }
             }
             ProxyNodeSections(selecting: $selecting, checked: $checked) { ids in
                 pendingIDs = Array(ids)
@@ -457,7 +457,7 @@ struct TunnelDebugView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
         }
-        .navigationTitle("隧道调试")
+        .navigationTitle("sing-box 配置")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button("分享") { sharing = true }

@@ -71,6 +71,45 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertFalse(text.contains("geoip"))
     }
 
+    func testBase64VLESSShareDecodesHostAndTLS() throws {
+        let inner = "11111111-1111-1111-1111-111111111111@104.18.33.45:443?encryption=none&security=tls&type=ws&path=%2Fws&host=example.com&sni=example.com&fp=chrome"
+        let encoded = Data(inner.utf8).base64EncodedString()
+        let node = try XCTUnwrap(LinkParser.parse("vless://\(encoded)#blob"))
+        XCTAssertEqual(node.server, "104.18.33.45")
+        XCTAssertEqual(node.port, 443)
+        XCTAssertEqual(node.secret, "11111111-1111-1111-1111-111111111111")
+        XCTAssertEqual(node.p("security"), "tls")
+        XCTAssertEqual(node.p("type"), "ws")
+        XCTAssertEqual(node.p("path"), "/ws")
+        XCTAssertEqual(node.p("sni"), "example.com")
+        let outbound = SingBoxConfig.outbound(node, tag: "n")
+        XCTAssertNil(outbound["encryption"])
+        XCTAssertEqual(outbound["packet_encoding"] as? String, "xudp")
+        let tls = try XCTUnwrap(outbound["tls"] as? [String: Any])
+        XCTAssertEqual(tls["server_name"] as? String, "example.com")
+        let transport = try XCTUnwrap(outbound["transport"] as? [String: Any])
+        XCTAssertEqual(transport["type"] as? String, "ws")
+        XCTAssertEqual(transport["path"] as? String, "/ws")
+        let saved = ProxyNode(name: encoded, proto: "vless", server: encoded, port: 443, secret: "", raw: "vless://\(encoded)#blob")
+        let fixed = LinkParser.normalized(saved)
+        XCTAssertEqual(fixed.server, "104.18.33.45")
+        XCTAssertEqual(fixed.id, saved.id)
+    }
+
+    func testShadowsocksChaChaUserinfoMatchesPlainMethod() throws {
+        let userinfo = Data("chacha20-ietf-poly1305:secret".utf8).base64EncodedString()
+        let node = try XCTUnwrap(LinkParser.parse("ss://\(userinfo)@60.249.39.171:2377#台湾 31"))
+        XCTAssertEqual(node.server, "60.249.39.171")
+        XCTAssertEqual(node.port, 2377)
+        XCTAssertEqual(node.p("method"), "chacha20-ietf-poly1305")
+        XCTAssertEqual(node.secret, "secret")
+        let outbound = SingBoxConfig.outbound(node, tag: "ss")
+        XCTAssertEqual(outbound["type"] as? String, "shadowsocks")
+        XCTAssertEqual(outbound["method"] as? String, "chacha20-ietf-poly1305")
+        XCTAssertEqual(outbound["password"] as? String, "secret")
+        XCTAssertNil(outbound["tls"])
+    }
+
     func testShortAccountNameStripsCloudflareDefault() {
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com's Account"), "Hual95000")
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com’s Account"), "Hual95000")
