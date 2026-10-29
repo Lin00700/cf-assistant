@@ -106,25 +106,13 @@ enum SingBoxConfig {
         return host
     }
 
-    static func groupTag(_ category: ProxyTrafficCategory) -> String {
-        "group-" + category.rawValue
-    }
-
-    private static func groupDefault(policy: ProxyGroupPolicy, selectedTag: String) -> String {
-        switch policy {
-        case .direct: return "direct"
-        case .auto: return "auto"
-        case .proxy, .follow: return selectedTag
-        }
-    }
-
-    /// 分类策略 → 最终出站（不绕选择器）
-    private static func outboundForPolicy(_ policy: ProxyGroupPolicy, hasNodes: Bool) -> String {
-        switch policy {
-        case .direct: return "direct"
-        case .auto: return hasNodes ? "auto" : "proxy"
-        case .proxy, .follow: return "proxy"
-        }
+    /// Hostname or IPv4. Rejects undecoded share blobs such as OjA3….
+    static func isDialableHost(_ host: String) -> Bool {
+        if host.isEmpty || host.count > 253 || host.contains(" ") { return false }
+        if literalIPv4(host) != nil { return true }
+        if host.contains(":") { return true }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+        return host.unicodeScalars.allSatisfy { allowed.contains($0) } && host.contains(".")
     }
 
     /// simple-obfs rejects `obfs-host=name:123456`. Keep a bare hostname and only obfs / obfs-host / obfs-uri.
@@ -162,145 +150,89 @@ enum SingBoxConfig {
         return out.joined(separator: ";")
     }
 
+
+    /// One proxy outbound (the chosen node, tag "proxy") plus direct. No urltest, no category selectors.
     static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
                       bypassCN: Bool, rules: [ProxyRoutingRule],
                       categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:],
                       resolvedExcludes: [String] = []) -> String {
-        let usable = nodes.filter(isSupported)
-        let chosen = usable.first { $0.id == selectedID }
-        var ordered = usable
-        if let chosen, let index = ordered.firstIndex(where: { $0.id == chosen.id }) {
-            ordered.remove(at: index)
-            ordered.insert(chosen, at: 0)
+        _ = mode
+        _ = categoryPolicies
+        guard let node = nodes.first(where: { $0.id == selectedID }) ?? nodes.first(where: isSupported) else {
+            return "{}"
         }
-        let tags = ordered.map { nodeTag($0) }
-        let selectedTag = chosen.map { nodeTag($0) } ?? tags.first ?? "direct"
-        let proxyDefault = mode == .automatic ? "auto" : selectedTag
-
+        let proxy = outbound(node, tag: "proxy")
         let direct: [String: Any] = ["type": "direct", "tag": "direct"]
-        var outbounds: [[String: Any]] = ordered.map { outbound($0, tag: nodeTag($0)) }
-        outbounds.append(direct)
-        if tags.isEmpty {
-            outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
-            for c in ProxyTrafficCategory.allCases {
-                outbounds.append(["type": "selector", "tag": groupTag(c), "outbounds": ["direct", "proxy"]])
-            }
-        } else {
-            let auto: [String: Any] = ["type": "urltest", "tag": "auto", "outbounds": tags,
-                                       "url": nodeProbeURL, "interval": "5m"]
-            let members = mode == .automatic ? ["auto"] + tags : [selectedTag] + tags.filter { $0 != selectedTag }
-            let selector: [String: Any] = ["type": "selector", "tag": "proxy", "outbounds": members,
-                                           "default": proxyDefault]
-            outbounds.append(auto)
-            outbounds.append(selector)
-            let groupMembers = ["proxy", "auto", "direct"] + tags
-            for c in ProxyTrafficCategory.allCases {
-                let policy = categoryPolicies[c] ?? .follow
-                let def = groupDefault(policy: policy, selectedTag: proxyDefault)
-                outbounds.append(["type": "selector", "tag": groupTag(c),
-                                  "outbounds": groupMembers,
-                                  "default": def])
-            }
+
+        var excludes = ["223.5.5.5/32", "8.8.8.8/32"]
+        if let ip = literalIPv4(node.server) {
+            excludes.insert("\(ip)/32", at: 0)
+        }
+        for cidr in resolvedExcludes where !excludes.contains(cidr) {
+            excludes.append(cidr)
         }
 
-        var nodeIPs: [String] = []
-        var nodeHosts: [String] = []
-        for n in ordered {
-            if let ip = literalIPv4(n.server) {
-                nodeIPs.append("\(ip)/32")
-            } else if n.server.contains(".") {
-                nodeHosts.append(n.server)
-            }
-        }
-        for cidr in resolvedExcludes where !nodeIPs.contains(cidr) {
-            nodeIPs.append(cidr)
-        }
-
-        // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
         var routeRules: [[String: Any]] = [
             ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic"]],
             ["protocol": "dns", "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
-
-        if !nodeIPs.isEmpty {
-            routeRules.append(["ip_cidr": nodeIPs, "outbound": "direct"])
-        }
-
         var dnsRules: [[String: Any]] = []
-        if !nodeHosts.isEmpty {
-            routeRules.append(["domain_suffix": nodeHosts, "outbound": "direct"])
-            dnsRules.append(["domain_suffix": nodeHosts, "server": "dns-local"])
+        if let ip = literalIPv4(node.server) {
+            routeRules.append(["ip_cidr": ["\(ip)/32"], "outbound": "direct"])
+        } else if node.server.contains(".") {
+            routeRules.append(["domain_suffix": [node.server], "outbound": "direct"])
+            dnsRules.append(["domain_suffix": [node.server], "server": "dns-local"])
         }
-        for r in rules {
-            let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
-            if v.isEmpty { continue }
-            let out = r.target == .direct ? "direct" : "proxy"
-            var rule: [String: Any] = ["outbound": out]
-            switch r.kind {
-            case .domainSuffix:
-                rule["domain_suffix"] = [v]
-                dnsRules.append(["domain_suffix": [v], "server": r.target == .direct ? "dns-local" : "dns-remote"])
-            case .ipCIDR:
-                rule["ip_cidr"] = [v]
-            }
-            routeRules.append(rule)
-        }
-
         if bypassCN {
             routeRules.append(["domain_suffix": cnSuffixes, "outbound": "direct"])
             dnsRules.append(["domain_suffix": cnSuffixes, "server": "dns-local"])
         }
-
-        // 分类：按策略直接指向 proxy / auto / direct（改完立刻进配置，不依赖选择器状态）
-        for c in ProxyTrafficCategory.allCases {
-            let policy = categoryPolicies[c] ?? .follow
-            let out = outboundForPolicy(policy, hasNodes: !tags.isEmpty)
-            if !c.suffixes.isEmpty {
-                routeRules.append(["domain_suffix": c.suffixes, "outbound": out])
-                dnsRules.append(["domain_suffix": c.suffixes,
-                                 "server": policy == .direct ? "dns-local" : "dns-remote"])
+        for rule in rules {
+            let value = rule.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.isEmpty { continue }
+            let outboundName = rule.target == .direct ? "direct" : "proxy"
+            var item: [String: Any] = ["outbound": outboundName]
+            switch rule.kind {
+            case .domainSuffix:
+                item["domain_suffix"] = [value]
+                dnsRules.append(["domain_suffix": [value], "server": rule.target == .direct ? "dns-local" : "dns-remote"])
+            case .ipCIDR:
+                item["ip_cidr"] = [value]
             }
+            routeRules.append(item)
         }
 
-        let dnsServers: [[String: Any]] = [
-            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
-            ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
-            ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
-        ]
         let dns: [String: Any] = [
-            "servers": dnsServers,
+            "servers": [
+                ["tag": "dns-local", "address": "udp://223.5.5.5", "detour": "direct"],
+                ["tag": "dns-remote", "address": "tls://8.8.8.8", "detour": "proxy"]
+            ],
             "rules": dnsRules,
             "final": "dns-remote",
-            "strategy": "prefer_ipv4",
-            "independent_cache": true
+            "strategy": "prefer_ipv4"
         ]
-
-        var tunExcludes: [String] = nodeIPs
-        tunExcludes.append(contentsOf: ["223.5.5.5/32", "8.8.8.8/32"])
-        var tun: [String: Any] = [
+        let tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],
             "mtu": 1500,
             "auto_route": true,
             "strict_route": false,
-            "stack": "system"
+            "stack": "system",
+            "inet4_route_exclude_address": excludes
         ]
-        if !tunExcludes.isEmpty {
-            tun["inet4_route_exclude_address"] = tunExcludes
-        }
-
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
             "auto_detect_interface": false
         ]
-        let log: [String: Any] = ["level": "debug", "timestamp": true]
-        let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
-        let experimental: [String: Any] = ["clash_api": clash]
         let cfg: [String: Any] = [
-            "log": log, "dns": dns, "inbounds": [tun], "outbounds": outbounds,
-            "route": route, "experimental": experimental
+            "log": ["level": "debug", "timestamp": true],
+            "dns": dns,
+            "inbounds": [tun],
+            "outbounds": [proxy, direct],
+            "route": route,
+            "experimental": ["clash_api": ["external_controller": "127.0.0.1:\(controlPort)"]]
         ]
         let data = (try? JSONSerialization.data(withJSONObject: cfg, options: [.sortedKeys])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)

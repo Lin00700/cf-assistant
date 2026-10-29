@@ -108,6 +108,20 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// Prefer the checked node when its host is a real IP or hostname. Otherwise the first node whose TCP probe succeeded.
+    private static func pickNode(_ store: ProxyStore) -> ProxyNode? {
+        let usable = store.nodes.filter { SingBoxConfig.isSupported($0) && SingBoxConfig.isDialableHost($0.server) }
+        if let selected = store.selected, usable.contains(where: { $0.id == selected.id }) {
+            return selected
+        }
+        return usable.first { node in
+            switch store.results[node.id] {
+            case .tcpLatency, .latency: return true
+            default: return false
+            }
+        }
+    }
+
     /// A records for hostname nodes, so their /32s can bypass the tun. Bounded so a dead resolver cannot stall connect.
     private static func resolvedNodeCIDRs(_ nodes: [ProxyNode]) async -> [String] {
         var cidrs: [String] = []
@@ -162,26 +176,25 @@ final class VPNManager: ObservableObject {
         error = nil
         do {
             if on {
-                guard store.nodes.contains(where: SingBoxConfig.isSupported) else {
-                    error = "请先添加并选择一个可用节点"
+                guard let node = Self.pickNode(store) else {
+                    error = "当前节点地址无效（不是正常的 IP 或域名，像是未解码的分享串）。请改选已测通的节点，例如「台湾 31」，或先点刷新延迟。"
                     return
                 }
+                if store.selectedID != node.id { store.selectedID = node.id }
                 guard let extID = extensionBundleID else {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return
                 }
-                let selectedID = store.selectedID ?? store.nodes.first?.id
-                let extra = await Self.resolvedNodeCIDRs(store.nodes)
-                let config = SingBoxConfig.build(nodes: store.nodes, selectedID: selectedID,
+                let extra = await Self.resolvedNodeCIDRs([node])
+                let config = SingBoxConfig.build(nodes: [node], selectedID: node.id,
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
-                                                 categoryPolicies: store.categoryPolicies,
                                                  resolvedExcludes: extra)
                 sentConfig = config
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = store.selected?.server ?? "sing-box"
+                proto.serverAddress = node.server
                 proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
