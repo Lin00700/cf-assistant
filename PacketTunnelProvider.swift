@@ -18,9 +18,9 @@ final class TunnelLog {
         let line = "[\(ts)] \(s)"
         lock.lock(); defer { lock.unlock() }
         lines.append(line)
-        if lines.count > 600 { lines.removeFirst(lines.count - 600) }
+        if lines.count > 4000 { lines.removeFirst(lines.count - 4000) }
         NSLog("CFTunnel: %@", s)
-        appendFile(line)
+        Self.appendFile(line)
     }
 
     func text() -> String {
@@ -34,17 +34,17 @@ final class TunnelLog {
         return body
     }
 
+    /// sing-box debug lines (via writeLog) and our own lines, inside the extension container.
     private static var fileURL: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("tunnel-log.txt")
+        return base.appendingPathComponent("sing-box-log.txt")
     }
 
-    private func appendFile(_ line: String) {
-        let url = Self.fileURL
+    private static func appendFile(_ line: String) {
+        let url = fileURL
         let payload = Data((line + "\n").utf8)
-        if let data = try? Data(contentsOf: url), data.count > 80_000 {
-            let tail = data.suffix(40_000)
-            try? tail.write(to: url)
+        if let data = try? Data(contentsOf: url), data.count > 400_000 {
+            try? data.suffix(200_000).write(to: url, options: .atomic)
         }
         if FileManager.default.fileExists(atPath: url.path),
            let handle = try? FileHandle(forWritingTo: url) {
@@ -52,7 +52,7 @@ final class TunnelLog {
             _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: payload)
         } else {
-            try? payload.write(to: url)
+            try? payload.write(to: url, options: .atomic)
         }
     }
 

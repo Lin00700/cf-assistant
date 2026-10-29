@@ -242,7 +242,7 @@ enum SingBoxConfig {
             "final": "proxy",
             "auto_detect_interface": false
         ]
-        let log: [String: Any] = ["level": "info", "timestamp": true]
+        let log: [String: Any] = ["level": "debug", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
         let experimental: [String: Any] = ["clash_api": clash]
         let cfg: [String: Any] = [

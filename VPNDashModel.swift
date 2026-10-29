@@ -195,9 +195,7 @@ final class VPNDashModel: ObservableObject {
         liveCount = rows.count
         countHistory = appended(countHistory, Double(rows.count))
         let apiMemory = int64(obj["memory"])
-        let ext = await VPNManager.shared.fetchMemory()
-        if let ext, ext > 0 { memory = ext }
-        else if apiMemory > 0 { memory = apiMemory }
+        if apiMemory > 0 { memory = apiMemory }
 
         var fresh: [LiveConn] = []
         var needed: [String] = []

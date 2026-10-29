@@ -7,12 +7,11 @@ final class VPNManager: ObservableObject {
 
     @Published var status: NEVPNStatus = .invalid
     @Published var error: String?
+    /// Exact JSON last passed to the extension as providerConfiguration["config"].
+    @Published var sentConfig: String = ""
 
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
-    /// Last extension log captured before the process exited. VPN 日志 shows this
-    /// after the tunnel drops and the message channel is gone.
-    @Published var savedLog: String = UserDefaults.standard.string(forKey: "vpn.tunnel.log") ?? ""
 
     var isActive: Bool { status == .connected || status == .connecting || status == .reasserting }
     var isConnected: Bool { status == .connected }
@@ -28,27 +27,14 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// Bundle id of the embedded packet tunnel, as rewritten by the re-signer.
-    /// With only CFTunnel.appex this is the same lookup the working 1.1.0 build uses.
-    /// If that bundle cannot be opened, fall back to the host id plus ".tunnel".
     var extensionBundleID: String? {
-        let derived: String? = {
-            guard let host = Bundle.main.bundleIdentifier, !host.isEmpty else { return nil }
-            return host + ".tunnel"
-        }()
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-        else { return derived }
-        if let tunnel = items.first(where: { $0.lastPathComponent == "CFTunnel.appex" }),
-           let id = Bundle(url: tunnel)?.bundleIdentifier, !id.isEmpty {
-            return id
+        else { return nil }
+        for u in items where u.pathExtension == "appex" {
+            if let id = Bundle(url: u)?.bundleIdentifier { return id }
         }
-        for url in items where url.pathExtension == "appex" {
-            if let id = Bundle(url: url)?.bundleIdentifier, id == derived || id.hasSuffix(".tunnel") {
-                return id
-            }
-        }
-        return derived
+        return nil
     }
 
     func load() async {
@@ -78,7 +64,6 @@ final class VPNManager: ObservableObject {
                     if self.error == nil {
                         self.error = "VPN 未能保持连接（扩展启动失败或配置被拒）。请确认已装「VPN 版」IPA，并检查节点加密方式后重试。"
                     }
-                    Task { await self.captureTunnelLog() }
                 }
                 if self.status == .connected {
                     self.error = nil
@@ -95,60 +80,29 @@ final class VPNManager: ObservableObject {
         }
     }
 
-    /// 扩展进程的物理内存占用。未连接或旧扩展不认识 "mem" 时返回 nil。
-    func fetchMemory() async -> Int64? {
-        guard isConnected, let session = manager?.connection as? NETunnelProviderSession else { return nil }
-        return await withCheckedContinuation { cont in
-            do {
-                try session.sendProviderMessage(Data("mem".utf8)) { data in
-                    let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    cont.resume(returning: Int64(trimmed))
-                }
-            } catch {
-                cont.resume(returning: nil)
-            }
-        }
-    }
-
-    func captureTunnelLog() async {
-        let text = await fetchLog(allowDisconnected: true)
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        savedLog = text
-        UserDefaults.standard.set(text, forKey: "vpn.tunnel.log")
-    }
-
-    func fetchLog(allowDisconnected: Bool = false) async -> String {
+    func fetchLog() async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
-            if !savedLog.isEmpty { return savedLog }
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"
         }
-        if !allowDisconnected, status == .invalid || status == .disconnected {
-            if !savedLog.isEmpty { return savedLog }
+        if status == .invalid || status == .disconnected {
             return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
         }
         return await withCheckedContinuation { cont in
             do {
                 try session.sendProviderMessage(Data("log".utf8)) { data in
                     guard let data else {
-                        cont.resume(returning: self.savedLog.isEmpty
-                            ? "扩展回了 nil 数据（进程可能已退出或消息通道未就绪）。"
-                            : self.savedLog)
+                        cont.resume(returning: "扩展回了 nil 数据（进程可能已退出或消息通道未就绪）。")
                         return
                     }
                     let text = String(data: data, encoding: .utf8) ?? ""
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        cont.resume(returning: self.savedLog.isEmpty
-                            ? "（扩展返回空字符串）状态=\(self.statusText)"
-                            : self.savedLog)
+                        cont.resume(returning: "（扩展返回空字符串）状态=\(self.statusText)")
                     } else {
                         cont.resume(returning: text)
                     }
                 }
             } catch {
-                cont.resume(returning: self.savedLog.isEmpty
-                    ? "读取失败：\(error.localizedDescription)"
-                    : self.savedLog)
+                cont.resume(returning: "读取失败：\(error.localizedDescription)")
             }
         }
     }
@@ -169,6 +123,7 @@ final class VPNManager: ObservableObject {
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
                                                  categoryPolicies: store.categoryPolicies)
+                sentConfig = config
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID

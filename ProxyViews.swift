@@ -32,7 +32,7 @@ struct ProxyHomeView: View {
             Section {
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
-                NavigationLink("sing-box 配置") { SingBoxConfigDebugView() }
+                NavigationLink("隧道调试") { TunnelDebugView() }
             }
             ProxyNodeSections(selecting: $selecting, checked: $checked) { ids in
                 pendingIDs = Array(ids)
@@ -422,39 +422,51 @@ struct NodeEditView: View {
     }
 }
 
-struct SingBoxConfigDebugView: View {
-    @ObservedObject private var store = ProxyStore.shared
-    @State private var copied = false
+struct TunnelDebugView: View {
+    @ObservedObject private var vpn = VPNManager.shared
+    @State private var log = ""
+    @State private var sharing = false
 
-    private var json: String {
-        let raw = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
-                                      mode: store.selectionMode, bypassCN: store.bypassCN,
-                                      rules: store.routingRules,
-                                      categoryPolicies: store.categoryPolicies)
-        guard let data = raw.data(using: .utf8),
+    private var configText: String {
+        let raw = vpn.sentConfig
+        guard !raw.isEmpty,
+              let data = raw.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data),
               let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
-              let text = String(data: pretty, encoding: .utf8) else { return raw }
+              let text = String(data: pretty, encoding: .utf8) else {
+            return raw.isEmpty ? "（还没有把配置交给扩展。先连接一次 VPN。）" : raw
+        }
         return text
+    }
+
+    private var bodyText: String {
+        """
+        ===== 交给扩展的 config =====
+        \(configText)
+
+        ===== sing-box / 扩展日志 =====
+        \(log.isEmpty ? "（日志为空）" : log)
+        """
     }
 
     var body: some View {
         ScrollView {
-            Text(json)
+            Text(bodyText)
                 .font(.system(size: 11, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
         }
-        .navigationTitle("sing-box 配置")
+        .navigationTitle("隧道调试")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(copied ? "已复制" : "复制") {
-                    UIPasteboard.general.string = json
-                    copied = true
-                }
+                Button("分享") { sharing = true }
             }
         }
+        .sheet(isPresented: $sharing) {
+            ShareSheet(items: [bodyText])
+        }
+        .task { log = await vpn.fetchLog() }
     }
 }
 
@@ -598,7 +610,7 @@ struct VPNLogView: View {
             Text(text).font(.system(size: 11, design: .monospaced)).padding()
         }
         .navigationTitle("日志")
-        .task { text = await vpn.fetchLog(allowDisconnected: true) }
+        .task { text = await vpn.fetchLog() }
     }
 }
 
