@@ -31,7 +31,7 @@ final class ProxyStore: ObservableObject {
 
     init() {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
-            nodes = arr.map(LinkParser.normalized)
+            nodes = arr
         }
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
@@ -92,21 +92,6 @@ final class ProxyStore: ObservableObject {
 
     func add(_ list: [ProxyNode]) {
         for n in list { add(n) }
-    }
-
-    /// Rewrite saved nodes whose server is still a base64 share blob. Clears a stale 不可用 result when the address changes.
-    func normalizeDecodedNodes() {
-        var next = nodes
-        var changed = false
-        for index in next.indices {
-            let fixed = LinkParser.normalized(next[index])
-            if fixed.server != next[index].server || fixed.secret != next[index].secret || fixed.port != next[index].port {
-                results[fixed.id] = nil
-                next[index] = fixed
-                changed = true
-            }
-        }
-        if changed { nodes = next }
     }
 
     func update(_ node: ProxyNode) {
