@@ -47,7 +47,7 @@ precondition(hijack < privateRoute)
 precondition(!rules.contains { ($0["ip_cidr"] as? [String])?.contains("1.1.1.1/32") == true && $0["outbound"] as? String == "direct" })
 let tun = (root["inbounds"] as! [[String: Any]])[0]
 let excludes = tun["route_exclude_address"] as! [String]
-precondition(excludes.contains("192.0.2.1/32") && !excludes.contains("1.1.1.1/32"))
+precondition(["192.0.2.1/32", "1.1.1.1/32", "223.5.5.5/32", "8.8.8.8/32"].allSatisfy { excludes.contains($0) })
 let outbounds = root["outbounds"] as! [[String: Any]]
 precondition(outbounds.contains { $0["type"] as? String == "shadowsocks" && $0["server"] as? String == ssNode.server && $0["server_port"] as? Int == ssNode.port && $0["password"] as? String == ssNode.secret })
 let xhttp = outbounds.first { $0["server"] as? String == "x.io" }!

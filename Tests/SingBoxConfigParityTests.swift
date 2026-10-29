@@ -75,9 +75,9 @@ final class SingBoxConfigParityTests: XCTestCase {
         let tun = try XCTUnwrap((root["inbounds"] as? [[String: Any]])?.first)
         let exclude = try XCTUnwrap(tun["route_exclude_address"] as? [String])
         XCTAssertTrue(exclude.contains("104.17.51.244/32"))
+        XCTAssertTrue(exclude.contains("1.1.1.1/32"))
         XCTAssertTrue(exclude.contains("223.5.5.5/32"))
         XCTAssertTrue(exclude.contains("8.8.8.8/32"))
-        XCTAssertFalse(exclude.contains("1.1.1.1/32"))
 
         XCTAssertFalse(text.contains("rule_set"))
         XCTAssertFalse(text.contains("geosite"))
@@ -88,5 +88,29 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com's Account"), "Hual95000")
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com’s Account"), "Hual95000")
         XCTAssertEqual(OverviewView.shortAccountName("示例的账户"), "示例")
+    }
+
+    func testLatencyResultsExposeMeasuredOrUnavailableStates() {
+        XCTAssertEqual(ProxyProbeResult.tcpLatency(60).label, "60 ms")
+        XCTAssertEqual(ProxyProbeResult.latency(123).label, "123 ms")
+        XCTAssertEqual(ProxyProbeResult.unreachable.label, "不可达")
+        XCTAssertEqual(ProxyProbeResult.probeFailed.label, "探测失败")
+        XCTAssertEqual(ProxyProbeResult.requiresVPN.label, "不支持直连 TCP")
+        XCTAssertEqual(ProxyProbeResult.unsupported.label, "协议不支持")
+        XCTAssertFalse(ProxyProbeResult.requiresVPN.countsAsTested)
+        XCTAssertFalse(ProxyProbeResult.unsupported.countsAsTested)
+    }
+
+    @MainActor
+    func testDirectTCPAndProxyHTTPSResultsAreIndependent() {
+        let store = ProxyStore()
+        let id = UUID()
+        store.directTCPResults[id] = .tcpLatency(60)
+        store.proxyHTTPSResults[id] = .latency(123)
+
+        store.proxyHTTPSResults[id] = .probeFailed
+
+        XCTAssertEqual(store.directTCPResults[id], .tcpLatency(60))
+        XCTAssertEqual(store.proxyHTTPSResults[id], .probeFailed)
     }
 }

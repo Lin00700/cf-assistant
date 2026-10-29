@@ -30,6 +30,7 @@ struct ProxyHomeView: View {
                 NavigationLink("流量分类") { TrafficCategoriesView() }
             }
             Section {
+                DNSQuickTestRow()
                 NavigationLink("连接诊断") { ConnectivityDiagnosticsView() }
                 NavigationLink("VPN 日志") { VPNLogView() }
                 NavigationLink("sing-box 配置") { TunnelDebugView() }
@@ -171,6 +172,50 @@ struct TrafficMeterRows: View {
     }
 }
 
+private struct DNSQuickTestRow: View {
+    @State private var isTesting = false
+    @State private var resultText = "点此测试"
+    @State private var succeeded: Bool?
+
+    var body: some View {
+        Button {
+            Task { await testDNS() }
+        } label: {
+            HStack {
+                Label("测试 DNS", systemImage: "network")
+                Spacer()
+                if isTesting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text(resultText)
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(succeeded.map { $0 ? .green : .orange } ?? .secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+            }
+        }
+        .disabled(isTesting)
+    }
+
+    @MainActor
+    private func testDNS() async {
+        isTesting = true
+        defer { isTesting = false }
+        let results = await ConnectivityDiagnosticsModel.testSystemDNS()
+        let a = results.first { $0.kind == .dnsA }
+        let aaaa = results.first { $0.kind == .dnsAAAA }
+        resultText = "\(dnsLabel("A", result: a)) · \(dnsLabel("AAAA", result: aaaa))"
+        succeeded = a?.success == true && aaaa?.success == true
+    }
+
+    private func dnsLabel(_ family: String, result: ConnectivityProbeResult?) -> String {
+        guard let result else { return "\(family) 未测" }
+        return result.success ? "\(family) \(result.elapsedMilliseconds)ms" : "\(family) 失败"
+    }
+}
+
 struct ProxyNodeSections: View {
     @ObservedObject private var store = ProxyStore.shared
     @ObservedObject private var vpn = VPNManager.shared
@@ -220,6 +265,21 @@ struct ProxyNodeSections: View {
         return store.nodes.filter { canonical($0.proto) == key }
     }
 
+    private var latencySummary: String {
+        let total = store.nodes.count
+        guard total > 0 else { return "暂无节点" }
+        if store.isRefreshing { return "测量中…" }
+        let results = vpn.isConnected ? store.proxyHTTPSResults : store.directTCPResults
+        guard !results.isEmpty else { return "未测" }
+        let measured = results.values.filter(\.countsAsTested).count
+        let reachable = results.values.filter(\.isReachable).count
+        guard measured > 0 else { return "无可测节点" }
+        if measured < total || results.count < total {
+            return "已测 \(measured)/\(total) · 连通 \(reachable)/\(total)"
+        }
+        return "连通 \(reachable)/\(total)"
+    }
+
     var body: some View {
         Group {
             Section {
@@ -229,14 +289,24 @@ struct ProxyNodeSections: View {
                     if store.isRefreshing {
                         HStack {
                             ProgressView()
-                            Text(vpn.isConnected ? "正在测代理延迟…" : "正在测试 TCP…")
+                            Text(vpn.isConnected ? "正在测代理 HTTPS…" : "正在测直连 TCP…")
                         }
                     } else {
                         Text("刷新延迟")
                     }
                 }
+                .disabled(store.isRefreshing)
+            } header: {
+                HStack(spacing: 8) {
+                    Text("节点")
+                    Spacer(minLength: 4)
+                    Text(latencySummary)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             } footer: {
-                Text("连接内置 VPN 后测试每个节点的代理 HTTPS 延迟；未连接时测试 TCP 端口建连延迟。左滑编辑，右滑删除。")
+                Text("VPN 断开时测直连 TCP；连接后测 sing-box 代理 HTTPS。两项分开保留，不会互相替代。切换连接状态时会标明上次实测；未测、不可测或失败会分别提示。左滑编辑，右滑删除。")
             }
             ForEach(protocols, id: \.self) { proto in
                 let group = nodes(of: proto)
@@ -258,7 +328,10 @@ struct ProxyNodeSections: View {
                             active: store.selectedID == node.id,
                             marked: checked.contains(node.id),
                             choosing: selecting,
-                            result: store.results[node.id]
+                            directResult: store.directTCPResults[node.id],
+                            proxyResult: store.proxyHTTPSResults[node.id],
+                            vpnConnected: vpn.isConnected,
+                            isRefreshing: store.isRefreshing
                         )
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -301,7 +374,10 @@ struct ProxyNodeLatencyRow: View {
     let active: Bool
     let marked: Bool
     let choosing: Bool
-    let result: ProxyProbeResult?
+    let directResult: ProxyProbeResult?
+    let proxyResult: ProxyProbeResult?
+    let vpnConnected: Bool
+    let isRefreshing: Bool
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -324,10 +400,19 @@ struct ProxyNodeLatencyRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .layoutPriority(1)
             Spacer()
-            if let result {
-                Text(result.label)
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(Self.tint(result))
+            VStack(alignment: .trailing, spacing: 4) {
+                latencyLine(
+                    title: "直连 TCP",
+                    result: directResult,
+                    isCurrentMeasurement: !vpnConnected,
+                    unavailable: vpnConnected ? "需断开 VPN 测" : "未测"
+                )
+                latencyLine(
+                    title: "代理 HTTPS",
+                    result: proxyResult,
+                    isCurrentMeasurement: vpnConnected,
+                    unavailable: vpnConnected ? "未测" : "需连接 VPN"
+                )
             }
             if active && !choosing {
                 Image(systemName: "checkmark.circle.fill")
@@ -336,11 +421,31 @@ struct ProxyNodeLatencyRow: View {
         }
     }
 
+    @ViewBuilder
+    private func latencyLine(title: String, result: ProxyProbeResult?, isCurrentMeasurement: Bool, unavailable: String) -> some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .foregroundColor(.secondary)
+            Text(valueLabel(result, isCurrentMeasurement: isCurrentMeasurement, unavailable: unavailable))
+                .foregroundColor(result.map(Self.tint) ?? .secondary)
+        }
+        .font(.caption2.monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.8)
+    }
+
+    private func valueLabel(_ result: ProxyProbeResult?, isCurrentMeasurement: Bool, unavailable: String) -> String {
+        if isCurrentMeasurement && isRefreshing { return "测量中…" }
+        guard let result else { return unavailable }
+        let historical = isCurrentMeasurement ? "" : "上次 "
+        return historical + result.label
+    }
+
     static func tint(_ result: ProxyProbeResult) -> Color {
         switch result {
         case .latency(let ms), .tcpLatency(let ms):
             return ms < 300 ? Color(red: 0.15, green: 0.55, blue: 0.28) : Color.orange
-        case .unreachable, .probeFailed:
+        case .unreachable, .probeFailed, .unsupported:
             return Color(red: 0.86, green: 0.38, blue: 0.12)
         case .requiresVPN:
             return .secondary

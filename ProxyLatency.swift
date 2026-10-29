@@ -7,25 +7,27 @@ enum ProxyProbeResult: Equatable, Sendable {
     case unreachable
     case probeFailed
     case requiresVPN
+    case unsupported
 
     var label: String {
         switch self {
         case .latency(let milliseconds): return "\(milliseconds) ms"
-        case .tcpLatency(let milliseconds): return "TCP \(milliseconds) ms"
-        case .unreachable: return "不可用"
+        case .tcpLatency(let milliseconds): return "\(milliseconds) ms"
+        case .unreachable: return "不可达"
         case .probeFailed: return "探测失败"
-        case .requiresVPN: return "需 VPN"
+        case .requiresVPN: return "不支持直连 TCP"
+        case .unsupported: return "协议不支持"
         }
     }
 
     var isReachable: Bool {
         switch self {
         case .latency, .tcpLatency: return true
-        case .unreachable, .probeFailed, .requiresVPN: return false
+        case .unreachable, .probeFailed, .requiresVPN, .unsupported: return false
         }
     }
 
-    var countsAsTested: Bool { self != .requiresVPN }
+    var countsAsTested: Bool { self != .requiresVPN && self != .unsupported }
 
     static func from(milliseconds: Int?) -> ProxyProbeResult {
         guard let milliseconds, milliseconds >= 0 else { return .probeFailed }

@@ -233,8 +233,8 @@ enum SingBoxConfig {
         // Some mobile networks time out UDP/53 while allowing direct TCP/443.
         // Use the literal Cloudflare IP to avoid a DNS bootstrap loop; keep this
         // resolver on the direct outbound for local/domestic DNS rules.
-        // Do not exclude 1.1.1.1 globally: direct sockets are bound to the physical
-        // interface by TunnelPlatform, so ordinary app traffic keeps its policy.
+        // Exclude the DoH endpoint as a /32 so it cannot be re-injected into TUN
+        // if IP_BOUND_IF binding fails. Other traffic to 1.1.1.1 also bypasses VPN.
         let dnsServers: [[String: Any]] = [
             ["type": "https", "tag": "dns-local", "server": "1.1.1.1", "server_port": 443,
              "path": "/dns-query", "detour": "direct"],
@@ -249,7 +249,7 @@ enum SingBoxConfig {
         ]
 
         var tunExcludes: [String] = nodeIPs
-        tunExcludes.append(contentsOf: ["223.5.5.5/32", "8.8.8.8/32"])
+        tunExcludes.append(contentsOf: ["1.1.1.1/32", "223.5.5.5/32", "8.8.8.8/32"])
         var tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
             "address": ["172.19.0.1/30"],

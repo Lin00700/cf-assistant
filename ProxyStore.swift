@@ -21,7 +21,8 @@ final class ProxyStore: ObservableObject {
     @Published var alwaysOn: Bool = false {
         didSet { UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on") }
     }
-    @Published var results: [UUID: ProxyProbeResult] = [:]
+    @Published var directTCPResults: [UUID: ProxyProbeResult] = [:]
+    @Published var proxyHTTPSResults: [UUID: ProxyProbeResult] = [:]
     @Published var isRefreshing = false
     @Published var refreshError: String?
 
@@ -107,7 +108,8 @@ final class ProxyStore: ObservableObject {
         for index in next.indices {
             let fixed = LinkParser.normalized(next[index])
             if fixed.server != next[index].server || fixed.secret != next[index].secret || fixed.port != next[index].port {
-                results[fixed.id] = nil
+                directTCPResults[fixed.id] = nil
+                proxyHTTPSResults[fixed.id] = nil
                 next[index] = fixed
                 changed = true
             }
@@ -116,7 +118,15 @@ final class ProxyStore: ObservableObject {
     }
 
     func update(_ node: ProxyNode) {
-        if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
+        if let i = nodes.firstIndex(where: { $0.id == node.id }) {
+            let old = nodes[i]
+            if old.server != node.server || old.port != node.port || old.proto != node.proto
+                || old.secret != node.secret || old.params != node.params {
+                directTCPResults[node.id] = nil
+                proxyHTTPSResults[node.id] = nil
+            }
+            nodes[i] = node
+        }
     }
 
     func remove(_ node: ProxyNode) {
@@ -129,7 +139,10 @@ final class ProxyStore: ObservableObject {
         let hitActive = selectedID.map { ids.contains($0) } ?? false
         guard !ids.isEmpty else { return false }
         nodes.removeAll { ids.contains($0.id) }
-        for id in ids { results[id] = nil }
+        for id in ids {
+            directTCPResults[id] = nil
+            proxyHTTPSResults[id] = nil
+        }
         if hitActive { selectedID = nodes.first?.id }
         return hitActive
     }
@@ -137,44 +150,69 @@ final class ProxyStore: ObservableObject {
     func removeAll() {
         nodes = []
         selectedID = nil
-        results = [:]
+        directTCPResults = [:]
+        proxyHTTPSResults = [:]
     }
 
-    /// 未连接 VPN 时显示 TCP 建连延迟；已连接时显示经每个节点的代理 HTTPS 延迟。
+    /// 分开保存两种测量：未连接 VPN 时测直连 TCP，连接后测 sing-box 代理 HTTPS。
+    /// 不在 VPN 已连接时把可能经过隧道的 TCP 测量冒充直连结果，也不覆盖另一组结果。
     func refreshLatency(vpnConnected: Bool) async {
         if isRefreshing || nodes.isEmpty { return }
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
+        guard VPNManager.shared.isConnected == vpnConnected else { return }
         if vpnConnected {
+            proxyHTTPSResults = [:]
             let usable = nodes.filter(SingBoxConfig.isSupported)
+            let usableIDs = Set(usable.map(\.id))
             do {
                 let measured = try await ProxyLatencyTester.measureViaSingBox(
                     nodes: usable,
                     controlURL: SingBoxConfig.controlURL
                 )
+                guard VPNManager.shared.isConnected else { return }
                 var next = measured
                 for node in nodes where next[node.id] == nil {
-                    next[node.id] = .probeFailed
+                    next[node.id] = usableIDs.contains(node.id) ? .probeFailed : .unsupported
                 }
-                results = next
+                proxyHTTPSResults = next
             } catch {
+                guard VPNManager.shared.isConnected else { return }
                 refreshError = error.localizedDescription
-                results = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, .probeFailed) })
+                proxyHTTPSResults = Dictionary(uniqueKeysWithValues: nodes.map {
+                    ($0.id, usableIDs.contains($0.id) ? .probeFailed : .unsupported)
+                })
             }
         } else {
-            results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+            directTCPResults = [:]
+            let measured = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+            guard !VPNManager.shared.isConnected else { return }
+            var next = measured
+            for node in nodes where next[node.id] == nil {
+                next[node.id] = .unreachable
+            }
+            directTCPResults = next
         }
     }
 
-    /// 可选的代理 HTTPS 探测。不写入 `results`，因此不会盖掉 TCP 毫秒。
+    /// 单独刷新代理 HTTPS 缓存，不会改写直连 TCP 测量。
     func refreshProxyLatency() async -> String? {
         let usable = nodes.filter(SingBoxConfig.isSupported)
+        let usableIDs = Set(usable.map(\.id))
         do {
-            let probed = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+            let values = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+            var probed = values
+            for node in nodes where probed[node.id] == nil {
+                probed[node.id] = usableIDs.contains(node.id) ? .probeFailed : .unsupported
+            }
+            proxyHTTPSResults = probed
             let ok = probed.values.filter(\.isReachable).count
             return "代理探测 \(ok)/\(probed.count)"
         } catch {
+            proxyHTTPSResults = Dictionary(uniqueKeysWithValues: nodes.map {
+                ($0.id, usableIDs.contains($0.id) ? .probeFailed : .unsupported)
+            })
             return error.localizedDescription
         }
     }

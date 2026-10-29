@@ -316,7 +316,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCom
 
     func usePlatformAutoDetectControl() -> Bool { true }
 
-    /// Bind direct sockets (dns-local 223.5.5.5, node dial) to the physical interface.
+    /// Bind direct sockets (dns-local 1.1.1.1 DoH, node dial) to the physical interface.
     /// auto_detect_interface alone does not bind while a platform interface is present.
     func autoDetectControl(_ fd: Int32) throws {
         ifaceLock.lock()

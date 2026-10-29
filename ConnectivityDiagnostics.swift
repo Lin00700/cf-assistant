@@ -189,6 +189,9 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
                 case .requiresVPN:
                     return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
                                                    detail: "该节点协议需要 VPN 才能进行 HTTPS 代理探测")
+                case .unsupported:
+                    return ConnectivityProbeResult(kind: .proxyHTTPS, success: false, elapsedMilliseconds: wallTime,
+                                                   detail: "该节点协议不支持 sing-box HTTPS 代理探测")
                 }
             } catch {
                 let elapsed = Int((DispatchTime.now().uptimeNanoseconds - probeStartedAt) / 1_000_000)
@@ -230,6 +233,16 @@ final class ConnectivityDiagnosticsModel: ObservableObject {
     func clearHistory() {
         runs = []
         UserDefaults.standard.removeObject(forKey: storageKey)
+    }
+
+    nonisolated static func testSystemDNS() async -> [ConnectivityProbeResult] {
+        await withTaskGroup(of: ConnectivityProbeResult.self) { group in
+            group.addTask { await Self.resolve(kind: .dnsA, family: AF_INET) }
+            group.addTask { await Self.resolve(kind: .dnsAAAA, family: AF_INET6) }
+            var results: [ConnectivityProbeResult] = []
+            for await result in group { results.append(result) }
+            return results.sorted { $0.kind.displayOrder < $1.kind.displayOrder }
+        }
     }
 
     func noteVPNInterruption() {
