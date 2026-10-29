@@ -214,8 +214,13 @@ enum SingBoxConfig {
             }
         }
 
+        // Some mobile networks time out UDP/53 while allowing direct TCP/443.
+        // Use the literal Cloudflare IP to avoid a DNS bootstrap loop; keep this
+        // resolver on the direct outbound for local/domestic DNS rules.
+        // Do not exclude 1.1.1.1 globally: direct sockets are bound to the physical
+        // interface by TunnelPlatform, so ordinary app traffic keeps its policy.
         let dnsServers: [[String: Any]] = [
-            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
+            ["tag": "dns-local",  "address": "https://1.1.1.1/dns-query", "detour": "direct"],
             ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
             ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
         ]
