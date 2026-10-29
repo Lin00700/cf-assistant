@@ -16,6 +16,7 @@ targets:
       path: CFAssistant.entitlements
       properties:
         com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+        com.apple.security.application-groups: [group.com.cfassistant.ios]
     dependencies:
       - target: CFTunnel
         embed: true
@@ -31,11 +32,11 @@ targets:
         PRODUCT_NAME: CFAssistant
         SWIFT_VERSION: "5.9"
         MARKETING_VERSION: "1.2.3"
-        CURRENT_PROJECT_VERSION: "7"
+        CURRENT_PROJECT_VERSION: "10"
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: VPN_BUILD
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: "CF助手"
+        INFOPLIST_KEY_CFBundleDisplayName: "CF助手 启动诊断测试"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
@@ -45,11 +46,12 @@ targets:
     platform: iOS
     sources:
       - path: .
-        includes: ["PacketTunnelProvider.swift"]
+        includes: ["PacketTunnelProvider.swift", "TunnelStartupFailure.swift"]
     entitlements:
       path: CFTunnel.entitlements
       properties:
         com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+        com.apple.security.application-groups: [group.com.cfassistant.ios]
     dependencies:
       - framework: Libbox.xcframework
         embed: false
@@ -57,10 +59,10 @@ targets:
     info:
       path: CFTunnel-Info.plist
       properties:
-        CFBundleDisplayName: CF助手 VPN
+        CFBundleDisplayName: CF助手 VPN 启动诊断测试
         NSLocalNetworkUsageDescription: "连接诊断会测试您输入的局域网 IP 和端口，仅用于测量 TCP 连通性。"
         CFBundleShortVersionString: "1.2.3"
-        CFBundleVersion: "7"
+        CFBundleVersion: "10"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSExtension:

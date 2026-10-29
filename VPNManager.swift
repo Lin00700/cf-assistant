@@ -39,8 +39,15 @@ final class VPNManager: ObservableObject {
         do {
             let all = try await NETunnelProviderManager.loadAllFromPreferences()
             if let m = all.first { attach(m) }
+            if !isActive, let failure = TunnelStartupFailureStore.lastMessage() {
+                self.error = "最近一次 VPN 启动失败（错误信息已脱敏）：\(failure)"
+            }
         } catch {
-            self.error = error.localizedDescription
+            if let failure = TunnelStartupFailureStore.lastMessage() {
+                self.error = "最近一次 VPN 启动失败（错误信息已脱敏）：\(failure)"
+            } else {
+                self.error = TunnelStartupFailureStore.sanitize(error.localizedDescription)
+            }
         }
     }
 
@@ -59,12 +66,17 @@ final class VPNManager: ObservableObject {
                 self.syncTrafficMonitor()
                 if (prev == .connecting || prev == .connected || prev == .reasserting),
                    self.status == .disconnected {
-                    if self.error == nil {
+                    if let failure = TunnelStartupFailureStore.lastMessage() {
+                        self.error = "VPN 启动失败（错误信息已脱敏）：\(failure)"
+                    } else if !TunnelStartupFailureStore.sharedContainerAvailable {
+                        self.error = "VPN 未能启动；当前安装包无法读取脱敏失败详情。请确认重签时保留 App Group entitlement：\(TunnelStartupFailureStore.appGroupIdentifier)"
+                    } else if self.error == nil {
                         self.error = "VPN 未能保持连接（扩展启动失败或配置被拒）。请确认已装「VPN 版」IPA，并检查节点加密方式后重试。"
                     }
                 }
                 if self.status == .connected {
                     self.error = nil
+                    TunnelStartupFailureStore.clear()
                 }
             }
         }
@@ -100,11 +112,17 @@ final class VPNManager: ObservableObject {
     }
 
     func fetchLog() async -> String {
+        if status == .invalid || status == .disconnected {
+            if let failure = TunnelStartupFailureStore.lastMessage() {
+                return "最近一次 VPN 启动失败（错误信息已脱敏）：\(failure)"
+            }
+            if !TunnelStartupFailureStore.sharedContainerAvailable {
+                return "无法读取隧道启动失败详情：请确认重签安装包保留 App Group entitlement：\(TunnelStartupFailureStore.appGroupIdentifier)"
+            }
+            return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
+        }
         guard let session = manager?.connection as? NETunnelProviderSession else {
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"
-        }
-        if status == .invalid || status == .disconnected {
-            return "VPN 未连接（状态：\(statusText)）。若刚打开又自动关掉，请到系统「设置 → 通用 → VPN 与设备管理」看配置是否还在，并确认装的是 VPN 版 IPA。"
         }
         return await withCheckedContinuation { cont in
             do {
@@ -117,7 +135,7 @@ final class VPNManager: ObservableObject {
                     if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         cont.resume(returning: "（扩展返回空字符串）状态=\(self.statusText)")
                     } else {
-                        cont.resume(returning: text)
+                        cont.resume(returning: TunnelStartupFailureStore.sanitize(text))
                     }
                 }
             } catch {
@@ -170,6 +188,7 @@ final class VPNManager: ObservableObject {
                 try await m.saveToPreferences()
                 try await m.loadFromPreferences()
                 attach(m)
+                TunnelStartupFailureStore.clear()
                 try m.connection.startVPNTunnel()
             } else {
                 if let m = manager {
@@ -181,7 +200,13 @@ final class VPNManager: ObservableObject {
                 VPNTraffic.shared.stopMonitoring()
             }
         } catch {
-            self.error = error.localizedDescription
+            let failure = TunnelStartupFailureStore.safeSummary(for: error)
+            if on {
+                TunnelStartupFailureStore.save(failure)
+                self.error = "VPN 启动请求失败（错误信息已脱敏）：\(failure)"
+            } else {
+                self.error = TunnelStartupFailureStore.sanitize(error.localizedDescription)
+            }
         }
     }
 

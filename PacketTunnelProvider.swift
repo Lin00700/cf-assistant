@@ -15,12 +15,13 @@ final class TunnelLog {
     }()
 
     func add(_ s: String) {
+        let safeMessage = TunnelStartupFailureStore.sanitize(s)
         let ts = iso.string(from: Date())
-        let line = "[\(ts)] \(s)"
+        let line = "[\(ts)] \(safeMessage)"
         lock.lock(); defer { lock.unlock() }
         lines.append(line)
         if lines.count > 600 { lines.removeFirst(lines.count - 600) }
-        NSLog("CFTunnel: %@", s)
+        NSLog("CFTunnel: %@", safeMessage)
     }
 
     func text() -> String {
@@ -44,8 +45,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]?) async throws {
         TunnelLog.shared.clear()
+        TunnelStartupFailureStore.clear()
         TunnelLog.shared.add("[ext] startTunnel begin")
 
+        do {
+            try await startTunnelImpl(options: options)
+            TunnelStartupFailureStore.clear()
+        } catch {
+            let failure = TunnelStartupFailureStore.safeSummary(for: error)
+            TunnelLog.shared.add("[ext] startTunnel failed (redacted): \(failure)")
+            TunnelStartupFailureStore.save(failure)
+            throw error
+        }
+    }
+
+    private func startTunnelImpl(options: [String: NSObject]?) async throws {
         guard let proto = protocolConfiguration as? NETunnelProviderProtocol,
               let config = proto.providerConfiguration?["config"] as? String, !config.isEmpty else {
             TunnelLog.shared.add("[ext] 缺少 sing-box 配置")
