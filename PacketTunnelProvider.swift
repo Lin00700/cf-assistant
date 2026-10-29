@@ -438,6 +438,7 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol, LibboxCom
     func clearDNSCache() {}
     func readWIFIState() -> LibboxWIFIState? { nil }
     func send(_ notification: LibboxNotification?) throws {}
+    func cancelNotification(_ identifier: String?, typeID: Int32) throws {}
     func startNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
     func closeNeighborMonitor(_ listener: LibboxNeighborUpdateListenerProtocol?) throws {}
     func registerMyInterface(_ name: String?) {}
