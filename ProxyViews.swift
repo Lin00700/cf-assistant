@@ -57,7 +57,8 @@ struct ProxyHomeView: View {
             exportSection
         }
         .scrollContentBackground(.hidden)
-        .background(InkTheme.paperGradient.ignoresSafeArea())
+        .listStyle(.insetGrouped)
+        .background(Color(red: 0.92, green: 0.91, blue: 0.94).ignoresSafeArea())
         .navigationTitle("VPN 与节点")
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -139,7 +140,7 @@ struct ProxyHomeView: View {
             Toggle("大陆常见域名直连", isOn: $store.bypassCN).tint(InkTheme.cinnabar)
             Toggle("始终连接", isOn: $store.alwaysOn).tint(InkTheme.cinnabar)
         }
-        .listRowBackground(InkTheme.paper.opacity(0.72))
+        .listRowBackground(Color.white)
     }
 
     private var diagnosticsSection: some View {
@@ -157,7 +158,7 @@ struct ProxyHomeView: View {
                 Label("VPN 运行日志", systemImage: "doc.text.magnifyingglass")
             }
         }
-        .listRowBackground(InkTheme.paper.opacity(0.72))
+        .listRowBackground(Color.white)
     }
 
     private var nodeHeaderSection: some View {
@@ -179,26 +180,39 @@ struct ProxyHomeView: View {
                 ForEach(protocols, id: \.self) { p in Text(title(p)).tag(title(p)) }
             }
         }
+        .listRowBackground(Color.white)
     }
 
     private func row(_ n: ProxyNode) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(store.selectedID == n.id ? InkTheme.cinnabar : InkTheme.gold.opacity(0.55))
-                .frame(width: 3, height: 28)
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(n.name).foregroundColor(InkTheme.ink)
-                Text(n.detail).font(.caption2).foregroundColor(InkTheme.inkSoft)
+                Text(n.name)
+                    .font(.body.weight(.semibold))
+                    .foregroundColor(InkTheme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(n.detail)
+                    .font(.subheadline)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .layoutPriority(1)
             Spacer()
             if let r = store.results[n.id] {
-                Text(r.label).font(.caption.monospacedDigit()).foregroundColor(color(for: r))
+                Text(r.label)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .foregroundColor(color(for: r))
+                    .lineLimit(1)
             }
             if store.selectedID == n.id {
-                Image(systemName: "seal.fill").foregroundColor(InkTheme.cinnabar)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 21))
+                    .foregroundColor(InkTheme.pine)
+                    .accessibilityLabel("已选择")
             }
         }
-        .listRowBackground(InkTheme.paper.opacity(0.72))
+        .padding(.vertical, 5)
+        .listRowBackground(Color.white)
+        .listRowSeparatorTint(InkTheme.ink.opacity(0.12))
         .contentShape(Rectangle())
         .onTapGesture {
             store.selectedID = n.id
@@ -218,11 +232,13 @@ struct ProxyHomeView: View {
 
     private func color(for r: ProxyProbeResult) -> Color {
         switch r {
-        case .latency(let ms), .tcpLatency(let ms): return ms < 200 ? InkTheme.pine : InkTheme.gold
-        case .unreachable, .probeFailed: return InkTheme.cinnabar
+        case .latency(let ms), .tcpLatency(let ms): return ms < 200 ? InkTheme.pine : nodeWarning
+        case .unreachable, .probeFailed: return nodeWarning
         case .requiresVPN: return InkTheme.inkSoft
         }
     }
+
+    private var nodeWarning: Color { Color(red: 0.69, green: 0.36, blue: 0.14) }
 
     private var addSection: some View {
         Section("添加节点") {
@@ -233,6 +249,7 @@ struct ProxyHomeView: View {
                 Label("部署 Cloudflare Worker 节点", systemImage: "cloud")
             }
         }
+        .listRowBackground(Color.white)
     }
 
     private var exportSection: some View {
@@ -248,6 +265,7 @@ struct ProxyHomeView: View {
             }
             .disabled(count == 0)
         }
+        .listRowBackground(Color.white)
     }
 }
 
