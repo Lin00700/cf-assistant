@@ -78,6 +78,27 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// Resolve cloudflare.com through sing-box inside the extension. Does not use the system resolver.
+    func querySingBoxDNS() async -> String {
+        guard let session = manager?.connection as? NETunnelProviderSession else {
+            return "FAIL 无法取得扩展会话"
+        }
+        return await withCheckedContinuation { cont in
+            do {
+                try session.sendProviderMessage(Data("dns".utf8)) { data in
+                    guard let data, let text = String(data: data, encoding: .utf8),
+                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        cont.resume(returning: "FAIL 扩展未返回 sing-box DNS 结果")
+                        return
+                    }
+                    cont.resume(returning: text)
+                }
+            } catch {
+                cont.resume(returning: "FAIL \(error.localizedDescription)")
+            }
+        }
+    }
+
     func fetchLog() async -> String {
         guard let session = manager?.connection as? NETunnelProviderSession else {
             return "无法取得 NETunnelProviderSession（manager 未就绪）。"
@@ -113,6 +134,13 @@ final class VPNManager: ObservableObject {
                     error = "请先添加并选择一个可用节点"
                     return
                 }
+                store.normalizeDecodedNodes()
+                if store.selectionMode == .manual, let node = store.selected,
+                   !LinkParser.serverLooksDialable(node.server) {
+                    let title = node.name.count > 24 ? String(node.name.prefix(24)) + "…" : node.name
+                    error = "当前节点「\(title)」的地址无法识别，不能连接。请改选 TCP 已测通的节点。"
+                    return
+                }
                 guard let extID = extensionBundleID else {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return
@@ -124,7 +152,9 @@ final class VPNManager: ObservableObject {
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = store.selected?.server ?? "sing-box"
+                // Match the working profile: iOS Server shows the parsed node
+                // label, while the actual remote host remains in sing-box config.
+                proto.serverAddress = store.selected?.name ?? "127.0.0.1"
                 proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"

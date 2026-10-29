@@ -11,13 +11,19 @@ targets:
       - path: .
         includes: ["*.swift"]
         excludes: ["PacketTunnelProvider.swift"]
+      - path: Assets.xcassets
+    info:
+      path: CFAssistant-Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios
         PRODUCT_NAME: CFAssistant
         SWIFT_VERSION: "5.9"
-        MARKETING_VERSION: "1.0.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "1.2.0"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: "CF助手"

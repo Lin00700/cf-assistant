@@ -35,6 +35,22 @@ enum SingBoxConfig {
             var t: [String: Any] = ["type": "httpupgrade", "path": n.p("path") ?? "/"]
             if let h = n.p("host") { t["host"] = h }
             return t
+        case "xhttp":
+            var t: [String: Any] = ["type": "xhttp"]
+            if let mode = n.p("mode") { t["mode"] = mode }
+            if let path = n.p("path") { t["path"] = path }
+            if let host = n.p("host") { t["host"] = host }
+            // Xray's XHTTP default is 100–1000 bytes; make it explicit so an
+            // imported Xray link without xPaddingBytes keeps the same wire format.
+            t["x_padding_bytes"] = n.p("x_padding_bytes") ?? "100-1000"
+            if let obfsMode = n.p("x_padding_obfs_mode") {
+                t["x_padding_obfs_mode"] = ["1", "true", "yes"].contains(obfsMode.lowercased())
+            }
+            if let key = n.p("x_padding_key") { t["x_padding_key"] = key }
+            if let header = n.p("x_padding_header") { t["x_padding_header"] = header }
+            if let method = n.p("x_padding_method") { t["x_padding_method"] = method }
+            if let placement = n.p("x_padding_placement") { t["x_padding_placement"] = placement }
+            return t
         default:
             return nil
         }
@@ -167,10 +183,14 @@ enum SingBoxConfig {
             }
         }
 
-        // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
+        // sniff 必须包含 dns。只嗅 tls/http/quic 时，发往 172.19.0.2:53 的查询
+        // 不会被标成 protocol=dns，接着被 ip_is_private 直接送出，系统 DNS 就会空等 30 秒。
         var routeRules: [[String: Any]] = [
-            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic"]],
+            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic", "dns"]],
+            ["ip_cidr": ["223.5.5.5/32", "8.8.8.8/32"], "outbound": "direct"],
             ["protocol": "dns", "action": "hijack-dns"],
+            ["ip_cidr": ["172.19.0.2/32", "127.0.0.1/32"], "port": 53, "action": "hijack-dns"],
+            ["port": 53, "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
 
@@ -210,17 +230,19 @@ enum SingBoxConfig {
             }
         }
 
+        // Old-DNS comparison only: retain the current core/XHTTP and modern schema.
+        // Local/bootstrap DNS uses the historical direct UDP resolver; other DNS
+        // follows dns-remote through the proxy. Keep the current DNS hijack fixes.
         let dnsServers: [[String: Any]] = [
-            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
-            ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
-            ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
+            ["type": "udp", "tag": "dns-local", "server": "223.5.5.5", "server_port": 53, "detour": "direct"],
+            ["type": "udp", "tag": "dns-backup", "server": "8.8.8.8", "server_port": 53, "detour": "direct"],
+            ["type": "tls", "tag": "dns-remote", "server": "8.8.8.8", "server_port": 853, "detour": "proxy"]
         ]
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
             "final": "dns-remote",
-            "strategy": "prefer_ipv4",
-            "independent_cache": true
+            "strategy": "prefer_ipv4"
         ]
 
         var tunExcludes: [String] = nodeIPs
@@ -234,12 +256,13 @@ enum SingBoxConfig {
             "stack": "system"
         ]
         if !tunExcludes.isEmpty {
-            tun["inet4_route_exclude_address"] = tunExcludes
+            tun["route_exclude_address"] = tunExcludes
         }
 
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
+            "default_domain_resolver": "dns-local",
             "auto_detect_interface": false
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]

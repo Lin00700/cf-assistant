@@ -154,6 +154,7 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 22) {
                 header(accountName)
                 statCards
+                HomeShortcutGrid()
                 if !m.badTunnels.isEmpty { alertSection }
                 usageSection
                 domainsSection
@@ -161,9 +162,26 @@ struct OverviewView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(AppBackdropView())
+        .background(Color.clear)
         .overlay { if !m.loaded { ProgressView() } }
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationTitle("首页")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    ForEach(session.accounts) { account in
+                        Button { session.selectAccount(account.id) } label: {
+                            if account.id == session.accountId {
+                                Label(account.name, systemImage: "checkmark")
+                            } else {
+                                Text(account.name)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "person.crop.circle")
+                }
+            }
+        }
         .task(id: ctx.acc) { await m.load(ctx) }
         .refreshable { await m.load(ctx) }
         .sheet(isPresented: $showLimits) { LimitsEditor() }
@@ -172,13 +190,30 @@ struct OverviewView: View {
     // MARK: 头部
 
     private func header(_ accountName: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(Self.dateText).font(.subheadline).foregroundColor(.secondary)
-            Text("\(Self.greeting)，\(accountName)")
-                .font(.system(.title2, design: .serif).bold()).lineLimit(2)
-            Text(zoneSummary).font(.subheadline).foregroundColor(.secondary)
+        InkBanner(height: 168) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.dateText)
+                    .font(.caption)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                Text(Self.greeting)
+                    .font(.subheadline)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                Text(Self.shortAccountName(accountName))
+                    .font(.custom("SongtiSC-Bold", size: 17, relativeTo: .body))
+                    .foregroundColor(InkTheme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(zoneSummary)
+                    .font(.caption)
+                    .foregroundColor(InkTheme.inkSoft)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .padding(.trailing, 72)
         }
-        .padding(.top, 8)
     }
 
     private var zoneSummary: String {
@@ -194,6 +229,21 @@ struct OverviewView: View {
         case 12..<18: return "下午好"
         default: return "晚上好"
         }
+    }
+
+    /// Cloudflare 默认账户名常为「邮箱's Account」。首页只留短名。
+    static func shortAccountName(_ raw: String) -> String {
+        var name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = name.range(of: #"['’‘ʼ]s Account\s*$"#, options: .regularExpression) {
+            name = String(name[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        for suffix in ["的账户", "的帐户"] where name.hasSuffix(suffix) {
+            name = String(name.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let at = name.firstIndex(of: "@") {
+            name = String(name[..<at])
+        }
+        return name.isEmpty ? "账户" : name
     }
 
     private static var dateText: String {
@@ -337,7 +387,7 @@ struct StatCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.subheadline).foregroundColor(InkTheme.inkSoft)
-            Text("\(value)").font(.system(size: 34, weight: .bold, design: .serif)).foregroundColor(InkTheme.ink)
+            Text("\(value)").font(.system(.largeTitle, design: .serif)).foregroundColor(InkTheme.ink)
             Text(caption).font(.caption).foregroundColor(InkTheme.inkSoft)
         }
         .cardStyle()

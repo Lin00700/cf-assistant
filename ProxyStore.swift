@@ -21,7 +21,8 @@ final class ProxyStore: ObservableObject {
     @Published var alwaysOn: Bool = false {
         didSet { UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on") }
     }
-    @Published var results: [UUID: ProxyProbeResult] = [:]
+    @Published var directTCPResults: [UUID: ProxyProbeResult] = [:]
+    @Published var proxyHTTPSResults: [UUID: ProxyProbeResult] = [:]
     @Published var isRefreshing = false
     @Published var refreshError: String?
 
@@ -31,7 +32,13 @@ final class ProxyStore: ObservableObject {
 
     init() {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
-            nodes = arr
+            let fixed = arr.map(LinkParser.normalized)
+            nodes = fixed
+            let changed = zip(arr, fixed).contains { old, new in
+                old.server != new.server || old.secret != new.secret || old.port != new.port
+                    || old.name != new.name || old.params != new.params
+            }
+            if changed { save() }
         }
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
@@ -94,39 +101,119 @@ final class ProxyStore: ObservableObject {
         for n in list { add(n) }
     }
 
+    /// Rewrite saved nodes whose server is still a base64 share blob. Clears a stale probe when the address changes.
+    func normalizeDecodedNodes() {
+        var next = nodes
+        var changed = false
+        for index in next.indices {
+            let fixed = LinkParser.normalized(next[index])
+            if fixed.server != next[index].server || fixed.secret != next[index].secret || fixed.port != next[index].port {
+                directTCPResults[fixed.id] = nil
+                proxyHTTPSResults[fixed.id] = nil
+                next[index] = fixed
+                changed = true
+            }
+        }
+        if changed { nodes = next }
+    }
+
     func update(_ node: ProxyNode) {
-        if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
+        if let i = nodes.firstIndex(where: { $0.id == node.id }) {
+            let old = nodes[i]
+            if old.server != node.server || old.port != node.port || old.proto != node.proto
+                || old.secret != node.secret || old.params != node.params {
+                directTCPResults[node.id] = nil
+                proxyHTTPSResults[node.id] = nil
+            }
+            nodes[i] = node
+        }
     }
 
     func remove(_ node: ProxyNode) {
-        nodes.removeAll { $0.id == node.id }
-        results[node.id] = nil
-        if selectedID == node.id { selectedID = nodes.first?.id }
+        _ = removeIDs([node.id])
+    }
+
+    /// 删掉这批节点并写回持久化。返回值表示当前选中节点被删掉了。
+    @discardableResult
+    func removeIDs(_ ids: Set<UUID>) -> Bool {
+        let hitActive = selectedID.map { ids.contains($0) } ?? false
+        guard !ids.isEmpty else { return false }
+        nodes.removeAll { ids.contains($0.id) }
+        for id in ids {
+            directTCPResults[id] = nil
+            proxyHTTPSResults[id] = nil
+        }
+        if hitActive { selectedID = nodes.first?.id }
+        return hitActive
     }
 
     func removeAll() {
         nodes = []
         selectedID = nil
-        results = [:]
+        directTCPResults = [:]
+        proxyHTTPSResults = [:]
     }
 
+    /// 分开保存两种测量：未连接 VPN 时测直连 TCP，连接后测 sing-box 代理 HTTPS。
+    /// 不在 VPN 已连接时把可能经过隧道的 TCP 测量冒充直连结果，也不覆盖另一组结果。
     func refreshLatency(vpnConnected: Bool) async {
         if isRefreshing || nodes.isEmpty { return }
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
+        guard VPNManager.shared.isConnected == vpnConnected else { return }
         if vpnConnected {
+            proxyHTTPSResults = [:]
             let usable = nodes.filter(SingBoxConfig.isSupported)
+            let usableIDs = Set(usable.map(\.id))
             do {
-                results = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+                let measured = try await ProxyLatencyTester.measureViaSingBox(
+                    nodes: usable,
+                    controlURL: SingBoxConfig.controlURL
+                )
+                guard VPNManager.shared.isConnected else { return }
+                var next = measured
+                for node in nodes where next[node.id] == nil {
+                    next[node.id] = usableIDs.contains(node.id) ? .probeFailed : .unsupported
+                }
+                proxyHTTPSResults = next
             } catch {
+                guard VPNManager.shared.isConnected else { return }
                 refreshError = error.localizedDescription
-                var failed: [UUID: ProxyProbeResult] = [:]
-                for n in nodes { failed[n.id] = .probeFailed }
-                results = failed
+                proxyHTTPSResults = Dictionary(uniqueKeysWithValues: nodes.map {
+                    ($0.id, usableIDs.contains($0.id) ? .probeFailed : .unsupported)
+                })
             }
         } else {
-            results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+            directTCPResults = [:]
+            let measured = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+            guard !VPNManager.shared.isConnected else { return }
+            var next = measured
+            for node in nodes where next[node.id] == nil {
+                next[node.id] = .unreachable
+            }
+            directTCPResults = next
+        }
+    }
+
+    /// 单独刷新代理 HTTPS 缓存，不会改写直连 TCP 测量。
+    func refreshProxyLatency() async -> String? {
+        let usable = nodes.filter(SingBoxConfig.isSupported)
+        let usableIDs = Set(usable.map(\.id))
+        do {
+            let values = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+            var probed = values
+            for node in nodes where probed[node.id] == nil {
+                probed[node.id] = usableIDs.contains(node.id) ? .probeFailed : .unsupported
+            }
+            proxyHTTPSResults = probed
+            let ok = probed.values.filter(\.isReachable).count
+            return "代理探测 \(ok)/\(probed.count)"
+        } catch {
+            proxyHTTPSResults = Dictionary(uniqueKeysWithValues: nodes.map {
+                ($0.id, usableIDs.contains($0.id) ? .probeFailed : .unsupported)
+            })
+            return error.localizedDescription
         }
     }
 }

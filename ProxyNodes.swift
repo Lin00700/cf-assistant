@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 // MARK: - 节点模型
 
@@ -167,18 +168,211 @@ enum LinkParser {
         return nodes
     }
 
+    /// `vless://uuid@host:port?...` stays as-is. `vless://BASE64(uuid@host:port?...)`
+    /// is decoded before the host is stored, otherwise the server becomes the blob
+    /// and sing-box cannot dial it. Shadowsocks keeps its own SIP002 parser.
     private static func generic(_ s: String, proto: String) -> ProxyNode? {
+        if let node = nodeFromDecodedShare(s, proto: proto) { return node }
+        return genericURL(s, proto: proto)
+    }
+
+    private static func genericURL(_ s: String, proto: String) -> ProxyNode? {
         guard let url = URL(string: s) else { return nil }
         let host = url.host ?? ""
-        let port = url.port ?? (proto == "hysteria2" ? 443 : 443)
-        let secret = url.user ?? ""
+        if proto == "vless", serverLooksLikeBlob(host) { return nil }
+        let port = url.port ?? 443
+        let secret = credential(url.user ?? "", proto: proto)
         var params: [String: String] = [:]
         if let items = URLComponents(string: s)?.queryItems {
             for i in items { if let v = i.value { params[i.name] = v } }
         }
+        params = normalizedTransportParams(params, proto: proto)
         let name = url.fragment?.removingPercentEncoding ?? host
         return ProxyNode(name: name.isEmpty ? host : name, proto: proto, server: host,
                          port: port, secret: secret, params: params, raw: s)
+    }
+
+    private static func nodeFromDecodedShare(_ s: String, proto: String) -> ProxyNode? {
+        guard let range = s.range(of: "://") else { return nil }
+        var body = String(s[range.upperBound...])
+        var fragment = ""
+        if let i = body.firstIndex(of: "#") {
+            fragment = String(body[body.index(after: i)...]).removingPercentEncoding ?? ""
+            body = String(body[..<i])
+        }
+        var query = ""
+        if let i = body.firstIndex(of: "?") {
+            query = String(body[body.index(after: i)...])
+            body = String(body[..<i])
+        }
+        let encodedCandidate = body.removingPercentEncoding ?? body
+        var encodedName = ""
+        if !encodedCandidate.contains("@"), let data = b64(encodedCandidate),
+           let text = String(data: data, encoding: .utf8), text.contains("@") {
+            encodedName = encodedCandidate
+            body = text
+            if let i = body.firstIndex(of: "#") {
+                if fragment.isEmpty {
+                    fragment = String(body[body.index(after: i)...]).removingPercentEncoding ?? ""
+                }
+                body = String(body[..<i])
+            }
+            if let i = body.firstIndex(of: "?") {
+                if query.isEmpty { query = String(body[body.index(after: i)...]) }
+                body = String(body[..<i])
+            }
+        }
+        guard let at = body.lastIndex(of: "@") else { return nil }
+        let user = String(body[..<at]).removingPercentEncoding ?? String(body[..<at])
+        var hostport = String(body[body.index(after: at)...])
+        hostport = hostport.removingPercentEncoding ?? hostport
+        guard let colon = hostport.lastIndex(of: ":"),
+              let port = Int(hostport[hostport.index(after: colon)...].filter(\.isNumber)),
+              (1...65535).contains(port) else { return nil }
+        var host = String(hostport[..<colon])
+        host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard serverLooksDialable(host) else { return nil }
+        let params = normalizedTransportParams(queryParams(query), proto: proto)
+        let fallbackName = proto == "vless" && !encodedName.isEmpty ? encodedName : host
+        let name = fragment.isEmpty ? fallbackName : fragment
+        return ProxyNode(name: name, proto: proto, server: host, port: port,
+                         secret: credential(user, proto: proto), params: params, raw: s)
+    }
+
+    /// `auto:uuid` / `:uuid` on a VLESS link is still just the UUID. Passwords stay intact.
+    private static func credential(_ user: String, proto: String) -> String {
+        let decoded = user.removingPercentEncoding ?? user
+        guard proto == "vless" || proto == "vmess" else { return decoded }
+        let parts = decoded.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        if parts.count == 2 {
+            let head = parts[0].lowercased()
+            if head.isEmpty || head == "auto" || head == "none" || parts[1].count >= 32 {
+                return parts[1]
+            }
+        }
+        return decoded
+    }
+
+    private static func queryParams(_ query: String) -> [String: String] {
+        var params: [String: String] = [:]
+        guard !query.isEmpty else { return params }
+        for pair in query.split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].removingPercentEncoding ?? parts[0]
+            let value = parts[1].removingPercentEncoding ?? parts[1]
+            if !key.isEmpty { params[key] = value }
+        }
+        return params
+    }
+
+    private static func normalizedTransportParams(_ params: [String: String], proto: String) -> [String: String] {
+        guard proto == "vless" else { return params }
+        var result = params
+        func value(_ keys: [String]) -> String? {
+            for key in keys {
+                if let pair = params.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame }), !pair.value.isEmpty {
+                    return pair.value
+                }
+            }
+            return nil
+        }
+
+        if let type = value(["type", "net"]) { result["type"] = type.lowercased() }
+        if let obfs = value(["obfs"]), obfs.lowercased() == "xhttp" { result["type"] = "xhttp" }
+        if let host = value(["host"]) { result["host"] = host }
+        if let sni = value(["sni", "peer", "servername", "server_name"]) { result["sni"] = sni }
+        if let security = value(["security"]) {
+            result["security"] = security.lowercased()
+        } else if let tls = value(["tls"]) {
+            let enabled = ["1", "true", "tls", "yes"].contains(tls.lowercased())
+            result["security"] = enabled ? "tls" : "none"
+        }
+
+        if result["type"] == "xhttp", let raw = value(["obfsParam", "obfs_param"]) {
+            mapXHTTPParameters(raw, into: &result)
+        }
+        return result
+    }
+
+    private static func mapXHTTPParameters(_ raw: String, into params: inout [String: String]) {
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+
+        func stringValue(_ value: Any) -> String? {
+            if let string = value as? String { return string }
+            if let number = value as? NSNumber {
+                if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue ? "true" : "false" }
+                return number.stringValue
+            }
+            return nil
+        }
+
+        func visit(_ value: Any) {
+            guard let dictionary = value as? [String: Any] else { return }
+            for (key, child) in dictionary {
+                let compact = key.lowercased().filter { $0.isLetter || $0.isNumber }
+                let target: String?
+                switch compact {
+                case "xpaddingbytes": target = "x_padding_bytes"
+                case "xpaddingobfsmode": target = "x_padding_obfs_mode"
+                case "xpaddingkey": target = "x_padding_key"
+                case "xpaddingheader": target = "x_padding_header"
+                case "xpaddingmethod": target = "x_padding_method"
+                case "xpaddingplacement": target = "x_padding_placement"
+                default: target = nil
+                }
+                if let target, let text = stringValue(child) {
+                    params[target] = text
+                } else if child is [String: Any] {
+                    visit(child)
+                }
+            }
+        }
+        visit(object)
+    }
+
+    static func serverLooksDialable(_ host: String) -> Bool {
+        if host.isEmpty || host.count > 253 || host.contains(" ") { return false }
+        let labels = host.split(separator: ".")
+        if labels.count == 4, labels.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false }) {
+            return true
+        }
+        if host.contains(":") { return true }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-")
+        return host.unicodeScalars.allSatisfy { allowed.contains($0) } && host.contains(".")
+    }
+
+    static func serverLooksLikeBlob(_ host: String) -> Bool {
+        if serverLooksDialable(host) || host.count < 16 { return false }
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+/= ")
+        return host.unicodeScalars.allSatisfy { allowed.contains($0) }
+    }
+
+    /// Re-read a saved node whose server is still the base64 share blob.
+    static func normalized(_ node: ProxyNode) -> ProxyNode {
+        let parsed: ProxyNode?
+        if !node.raw.isEmpty {
+            parsed = parse(node.raw)
+        } else if serverLooksLikeBlob(node.server) {
+            parsed = parse("\(node.proto)://\(node.server)")
+        } else {
+            parsed = nil
+        }
+        guard let parsed, serverLooksDialable(parsed.server) else { return node }
+        var mergedParams = node.params
+        for (key, value) in parsed.params where !value.isEmpty { mergedParams[key] = value }
+        let preserveName = !serverLooksLikeBlob(node.name) && node.name != node.server
+        let desiredName = preserveName ? node.name : parsed.name
+        guard parsed.server != node.server || parsed.secret != node.secret || parsed.port != node.port
+                || desiredName != node.name || mergedParams != node.params else { return node }
+        var fixed = parsed
+        fixed.id = node.id
+        if !node.raw.isEmpty { fixed.raw = node.raw }
+        fixed.name = desiredName
+        fixed.params = mergedParams
+        if fixed.secret.isEmpty { fixed.secret = node.secret }
+        return fixed
     }
 
     private static func vmess(_ s: String) -> ProxyNode? {
