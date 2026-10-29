@@ -34,6 +34,19 @@ final class TunnelLog {
         return body
     }
 
+    /// NE provider messages fail (callback data is nil) when the payload is too large.
+    func messageText() -> String {
+        let full = text()
+        let cap = 24_000
+        let body: String
+        if full.count > cap {
+            body = "…(只回最后 \(cap) 字)\n" + String(full.suffix(cap))
+        } else {
+            body = full
+        }
+        return "log file: \(Self.fileURL.path)\n" + body
+    }
+
     /// sing-box debug lines (via writeLog) and our own lines, inside the extension container.
     private static var fileURL: URL {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -120,7 +133,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
-        completionHandler?(Data(TunnelLog.shared.text().utf8))
+        let payload = Data(TunnelLog.shared.messageText().utf8)
+        completionHandler?(payload)
     }
 
     override func stopTunnel(with reason: NEProviderStopReason) async {

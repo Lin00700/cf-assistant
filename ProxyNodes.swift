@@ -249,7 +249,7 @@ enum LinkParser {
         if !plugin.isEmpty {
             let parts = plugin.split(separator: ";", maxSplits: 1).map(String.init)
             params["plugin"] = parts[0] == "simple-obfs" ? "obfs-local" : parts[0]
-            params["plugin_opts"] = parts.count > 1 ? parts[1] : ""
+            params["plugin_opts"] = SingBoxConfig.sanitizePluginOpts(parts.count > 1 ? parts[1] : "")
         }
         return ProxyNode(name: name.isEmpty ? host : name, proto: "ss", server: host, port: port,
                          secret: pass, params: params, raw: s)

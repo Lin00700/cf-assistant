@@ -62,7 +62,8 @@ enum SingBoxConfig {
             o["password"] = n.secret
             if let pl = n.p("plugin") {
                 o["plugin"] = pl
-                o["plugin_opts"] = n.params["plugin_opts"] ?? ""
+                let opts = sanitizePluginOpts(n.params["plugin_opts"] ?? "")
+                if !opts.isEmpty { o["plugin_opts"] = opts }
             }
         case "hysteria2":
             o["type"] = "hysteria2"
@@ -126,16 +127,58 @@ enum SingBoxConfig {
         }
     }
 
+    /// simple-obfs rejects `obfs-host=name:123456`. Keep a bare hostname and only obfs / obfs-host / obfs-uri.
+    static func sanitizePluginOpts(_ raw: String) -> String {
+        var obfs = ""
+        var host = ""
+        var uri = ""
+        for part in raw.split(separator: ";") {
+            let bits = part.split(separator: "=", maxSplits: 1).map {
+                String($0).trimmingCharacters(in: .whitespaces)
+            }
+            guard bits.count == 2 else { continue }
+            switch bits[0] {
+            case "obfs":
+                obfs = bits[1]
+            case "obfs-host":
+                var value = bits[1]
+                if let colon = value.lastIndex(of: ":") {
+                    let tail = value[value.index(after: colon)...]
+                    if !tail.isEmpty, tail.allSatisfy(\.isNumber) {
+                        value = String(value[..<colon])
+                    }
+                }
+                host = value
+            case "obfs-uri":
+                uri = bits[1]
+            default:
+                break
+            }
+        }
+        var out: [String] = []
+        if !obfs.isEmpty { out.append("obfs=\(obfs)") }
+        if !host.isEmpty { out.append("obfs-host=\(host)") }
+        if !uri.isEmpty { out.append("obfs-uri=\(uri)") }
+        return out.joined(separator: ";")
+    }
+
     static func build(nodes: [ProxyNode], selectedID: UUID?, mode: ProxySelectionMode,
                       bypassCN: Bool, rules: [ProxyRoutingRule],
-                      categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:]) -> String {
+                      categoryPolicies: [ProxyTrafficCategory: ProxyGroupPolicy] = [:],
+                      resolvedExcludes: [String] = []) -> String {
         let usable = nodes.filter(isSupported)
-        let tags = usable.map { nodeTag($0) }
-        let selectedTag = usable.first(where: { $0.id == selectedID }).map { nodeTag($0) } ?? tags.first ?? "direct"
+        let chosen = usable.first { $0.id == selectedID }
+        var ordered = usable
+        if let chosen, let index = ordered.firstIndex(where: { $0.id == chosen.id }) {
+            ordered.remove(at: index)
+            ordered.insert(chosen, at: 0)
+        }
+        let tags = ordered.map { nodeTag($0) }
+        let selectedTag = chosen.map { nodeTag($0) } ?? tags.first ?? "direct"
         let proxyDefault = mode == .automatic ? "auto" : selectedTag
 
         let direct: [String: Any] = ["type": "direct", "tag": "direct"]
-        var outbounds: [[String: Any]] = usable.map { outbound($0, tag: nodeTag($0)) }
+        var outbounds: [[String: Any]] = ordered.map { outbound($0, tag: nodeTag($0)) }
         outbounds.append(direct)
         if tags.isEmpty {
             outbounds.append(["type": "selector", "tag": "proxy", "outbounds": ["direct"]])
@@ -161,10 +204,16 @@ enum SingBoxConfig {
         }
 
         var nodeIPs: [String] = []
-        for n in usable {
+        var nodeHosts: [String] = []
+        for n in ordered {
             if let ip = literalIPv4(n.server) {
                 nodeIPs.append("\(ip)/32")
+            } else if n.server.contains(".") {
+                nodeHosts.append(n.server)
             }
+        }
+        for cidr in resolvedExcludes where !nodeIPs.contains(cidr) {
+            nodeIPs.append(cidr)
         }
 
         // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
@@ -179,6 +228,10 @@ enum SingBoxConfig {
         }
 
         var dnsRules: [[String: Any]] = []
+        if !nodeHosts.isEmpty {
+            routeRules.append(["domain_suffix": nodeHosts, "outbound": "direct"])
+            dnsRules.append(["domain_suffix": nodeHosts, "server": "dns-local"])
+        }
         for r in rules {
             let v = r.value.trimmingCharacters(in: .whitespacesAndNewlines)
             if v.isEmpty { continue }

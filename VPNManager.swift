@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import NetworkExtension
 
 @MainActor
@@ -107,6 +108,56 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// A records for hostname nodes, so their /32s can bypass the tun. Bounded so a dead resolver cannot stall connect.
+    private static func resolvedNodeCIDRs(_ nodes: [ProxyNode]) async -> [String] {
+        var cidrs: [String] = []
+        for node in nodes where SingBoxConfig.isSupported(node) {
+            let host = node.server
+            if host.split(separator: ".").count == 4, host.split(separator: ".").allSatisfy({ Int($0) != nil }) {
+                continue
+            }
+            let ips = await lookupIPv4(host)
+            for ip in ips where !cidrs.contains("\(ip)/32") {
+                cidrs.append("\(ip)/32")
+            }
+        }
+        return cidrs
+    }
+
+    private static func lookupIPv4(_ host: String) async -> [String] {
+        await withTaskGroup(of: [String].self) { group in
+            group.addTask {
+                await Task.detached(priority: .utility) {
+                    var hints = addrinfo()
+                    hints.ai_family = AF_INET
+                    hints.ai_socktype = Int32(SOCK_STREAM)
+                    var resolved: UnsafeMutablePointer<addrinfo>?
+                    guard getaddrinfo(host, nil, &hints, &resolved) == 0, let first = resolved else { return [] }
+                    defer { freeaddrinfo(first) }
+                    var addresses: [String] = []
+                    var current: UnsafeMutablePointer<addrinfo>? = first
+                    while let item = current {
+                        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                        if getnameinfo(item.pointee.ai_addr, item.pointee.ai_addrlen,
+                                       &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 {
+                            let address = String(cString: buffer)
+                            if !addresses.contains(address) { addresses.append(address) }
+                        }
+                        current = item.pointee.ai_next
+                    }
+                    return addresses
+                }.value
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                return []
+            }
+            let first = await group.next() ?? []
+            group.cancelAll()
+            return first
+        }
+    }
+
     func set(on: Bool, store: ProxyStore) async {
         error = nil
         do {
@@ -119,10 +170,13 @@ final class VPNManager: ObservableObject {
                     error = "这个安装包不含 VPN 扩展，请使用「VPN 版」IPA"
                     return
                 }
-                let config = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
+                let selectedID = store.selectedID ?? store.nodes.first?.id
+                let extra = await Self.resolvedNodeCIDRs(store.nodes)
+                let config = SingBoxConfig.build(nodes: store.nodes, selectedID: selectedID,
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
-                                                 categoryPolicies: store.categoryPolicies)
+                                                 categoryPolicies: store.categoryPolicies,
+                                                 resolvedExcludes: extra)
                 sentConfig = config
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()

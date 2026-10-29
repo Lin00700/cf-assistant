@@ -71,6 +71,18 @@ final class SingBoxConfigParityTests: XCTestCase {
         XCTAssertFalse(text.contains("geoip"))
     }
 
+    func testPluginOptsDropNumericHostSuffix() {
+        let raw = "obfs=tls;obfs-host=7163ef6.default.microsoft.jp:205696;obfs-uri=/;peer=9"
+        XCTAssertEqual(
+            SingBoxConfig.sanitizePluginOpts(raw),
+            "obfs=tls;obfs-host=7163ef6.default.microsoft.jp;obfs-uri=/"
+        )
+        XCTAssertEqual(
+            SingBoxConfig.sanitizePluginOpts("obfs=tls;obfs-host=0dd87c2.default.xboxlive.com:299268"),
+            "obfs=tls;obfs-host=0dd87c2.default.xboxlive.com"
+        )
+    }
+
     func testShortAccountNameStripsCloudflareDefault() {
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com's Account"), "Hual95000")
         XCTAssertEqual(OverviewView.shortAccountName("Hual95000@gmail.com’s Account"), "Hual95000")

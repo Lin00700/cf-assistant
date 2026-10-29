@@ -424,8 +424,14 @@ struct NodeEditView: View {
 
 struct TunnelDebugView: View {
     @ObservedObject private var vpn = VPNManager.shared
+    @ObservedObject private var store = ProxyStore.shared
     @State private var log = ""
     @State private var sharing = false
+
+    private var storeLine: String {
+        guard let node = store.selected else { return "（无）" }
+        return "\(node.name)  \(node.server):\(node.port)  \(node.id.uuidString.lowercased())"
+    }
 
     private var configText: String {
         let raw = vpn.sentConfig
@@ -441,6 +447,10 @@ struct TunnelDebugView: View {
 
     private var bodyText: String {
         """
+        ===== 当前选中 =====
+        \(vpn.sentConfig.isEmpty ? "尚未连接" : "以下 JSON 是最近一次连接写进扩展的原文")
+        界面选中：\(storeLine)
+
         ===== 交给扩展的 config =====
         \(configText)
 
