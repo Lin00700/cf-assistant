@@ -11,6 +11,7 @@ targets:
       - path: .
         includes: ["*.swift"]
         excludes: ["PacketTunnelProvider.swift", "CFControl/**"]
+      - path: CFControlShared/VPNCloudControlIntent.swift
     entitlements:
       path: CFAssistant.entitlements
       properties:
@@ -77,6 +78,7 @@ targets:
     sources:
       - path: CFControl
         includes: ["*.swift"]
+      - path: CFControlShared/VPNCloudControlIntent.swift
     entitlements:
       path: CFControl.entitlements
       properties:

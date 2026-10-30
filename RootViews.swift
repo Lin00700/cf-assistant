@@ -137,15 +137,26 @@ struct MoreView: View {
 
     var body: some View {
         List {
-            Section {
+            Section("外观") {
                 NavigationLink { AppearanceSettingsView() } label: {
-                    Label("背景与主题", systemImage: "paintpalette.fill")
-                }
-                NavigationLink { APITokensView() } label: {
-                    Label("API Token", systemImage: "key.fill")
+                    Label("背景与主题", systemImage: "paintpalette")
                 }
             }
-            Section {
+            Section("工具") {
+                NavigationLink { APITokensView() } label: {
+                    Label("API Token 管理", systemImage: "key.horizontal")
+                }
+            }
+            Section("账户") {
+                if session.accounts.count > 1 {
+                    Picker("当前账户", selection: $session.accountId) {
+                        ForEach(session.accounts) { account in
+                            Text(account.name).tag(account.id)
+                        }
+                    }
+                } else if let account = session.accounts.first {
+                    LabeledContent("当前账户", value: account.name)
+                }
                 Button(role: .destructive) {
                     session.logout()
                 } label: {

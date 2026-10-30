@@ -4,6 +4,7 @@ import NetworkExtension
 @MainActor
 final class VPNManager: ObservableObject {
     static let shared = VPNManager()
+    private static let tunnelProviderBundleIdentifier = "com.cfassistant.ios.tunnel"
 
     @Published var status: NEVPNStatus = .invalid
     @Published var error: String?
@@ -11,7 +12,9 @@ final class VPNManager: ObservableObject {
     private var manager: NETunnelProviderManager?
     private var observer: NSObjectProtocol?
 
-    var isActive: Bool { status == .connected || status == .connecting || status == .reasserting }
+    var isActive: Bool {
+        status == .connected || status == .connecting || status == .reasserting || status == .disconnecting
+    }
     var isConnected: Bool { status == .connected }
 
     var statusText: String {
@@ -29,18 +32,38 @@ final class VPNManager: ObservableObject {
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return nil }
-        for u in items where u.pathExtension == "appex" {
-            if let id = Bundle(url: u)?.bundleIdentifier { return id }
-        }
-        return nil
+        return items
+            .filter { $0.pathExtension == "appex" }
+            .compactMap { Bundle(url: $0)?.bundleIdentifier }
+            .first { $0 == Self.tunnelProviderBundleIdentifier }
     }
 
     func load() async {
         do {
             let all = try await NETunnelProviderManager.loadAllFromPreferences()
-            if let m = all.first { attach(m) }
+            let matches = all.filter(isCFAssistantTunnel)
+            if let m = matches.first(where: isActiveVPN) ?? matches.first {
+                attach(m)
+            } else {
+                manager = nil
+                status = .disconnected
+                syncTrafficMonitor()
+            }
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func isCFAssistantTunnel(_ manager: NETunnelProviderManager) -> Bool {
+        guard manager.localizedDescription == "CF助手",
+              let proto = manager.protocolConfiguration as? NETunnelProviderProtocol else { return false }
+        return proto.providerBundleIdentifier == Self.tunnelProviderBundleIdentifier
+    }
+
+    private func isActiveVPN(_ manager: NETunnelProviderManager) -> Bool {
+        switch manager.connection.status {
+        case .connected, .connecting, .reasserting, .disconnecting: return true
+        default: return false
         }
     }
 
@@ -48,6 +71,7 @@ final class VPNManager: ObservableObject {
         manager = m
         status = m.connection.status
         syncTrafficMonitor()
+        VPNControlRefresh.reload()
         if let o = observer { NotificationCenter.default.removeObserver(o) }
         observer = NotificationCenter.default.addObserver(
             forName: .NEVPNStatusDidChange, object: m.connection, queue: .main
@@ -57,6 +81,7 @@ final class VPNManager: ObservableObject {
                 let prev = self.status
                 self.status = m.connection.status
                 self.syncTrafficMonitor()
+                VPNControlRefresh.reload()
                 if (prev == .connecting || prev == .connected || prev == .reasserting),
                    self.status == .disconnected {
                     if self.error == nil {
@@ -121,7 +146,9 @@ final class VPNManager: ObservableObject {
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
                                                  categoryPolicies: store.categoryPolicies)
-                let m = manager ?? NETunnelProviderManager()
+                let savedManagers = try await NETunnelProviderManager.loadAllFromPreferences()
+                let matches = savedManagers.filter(isCFAssistantTunnel)
+                let m = matches.first(where: isActiveVPN) ?? matches.first ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
                 // 系统设置里显示 127.0.0.1，对应通的状态
@@ -130,15 +157,37 @@ final class VPNManager: ObservableObject {
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
                 m.isEnabled = true
-                // 按需连接默认开，系统设置显示绿开关
-                m.isOnDemandEnabled = true
-                let rule = NEOnDemandRuleConnect()
-                rule.interfaceTypeMatch = .any
-                m.onDemandRules = [rule]
+                m.isOnDemandEnabled = store.alwaysOn
+                if store.alwaysOn {
+                    let rule = NEOnDemandRuleConnect()
+                    rule.interfaceTypeMatch = .any
+                    m.onDemandRules = [rule]
+                } else {
+                    m.onDemandRules = []
+                }
                 try await m.saveToPreferences()
                 try await m.loadFromPreferences()
                 attach(m)
-                try m.connection.startVPNTunnel()
+                switch m.connection.status {
+                case .connected, .connecting, .reasserting:
+                    break
+                case .disconnecting:
+                    for _ in 0..<32 {
+                        if m.connection.status != .disconnecting { break }
+                        do {
+                            try await Task.sleep(nanoseconds: 250_000_000)
+                        } catch {
+                            return
+                        }
+                    }
+                    if m.connection.status == .disconnected {
+                        try m.connection.startVPNTunnel()
+                    } else if m.connection.status == .disconnecting {
+                        error = "VPN 仍在断开，稍后再试。"
+                    }
+                default:
+                    try m.connection.startVPNTunnel()
+                }
             } else {
                 if let m = manager {
                     m.isOnDemandEnabled = false
@@ -153,10 +202,42 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    func setOnDemandEnabled(_ enabled: Bool) async {
+        do {
+            let all = try await NETunnelProviderManager.loadAllFromPreferences()
+            let matches = all.filter(isCFAssistantTunnel)
+            guard let m = matches.first(where: isActiveVPN) ?? matches.first else { return }
+            m.isOnDemandEnabled = enabled
+            if enabled {
+                let rule = NEOnDemandRuleConnect()
+                rule.interfaceTypeMatch = .any
+                m.onDemandRules = [rule]
+            } else {
+                m.onDemandRules = []
+            }
+            try await m.saveToPreferences()
+            try await m.loadFromPreferences()
+            attach(m)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func restartIfActive(store: ProxyStore) async {
         guard isActive else { return }
         await set(on: false, store: store)
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
+        for _ in 0..<32 {
+            if status == .disconnected || status == .invalid { break }
+            do {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            } catch {
+                return
+            }
+        }
+        guard status == .disconnected || status == .invalid else {
+            error = "VPN 仍在断开，稍后再试重连。"
+            return
+        }
         await set(on: true, store: store)
     }
 
