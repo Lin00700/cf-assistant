@@ -124,19 +124,17 @@ final class VPNManager: ObservableObject {
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID
-                proto.serverAddress = store.selected?.server ?? "sing-box"
+                // 系统设置里显示 127.0.0.1，对应通的状态
+                proto.serverAddress = "127.0.0.1"
                 proto.providerConfiguration = ["config": config]
                 m.protocolConfiguration = proto
                 m.localizedDescription = "CF助手"
                 m.isEnabled = true
-                m.isOnDemandEnabled = store.alwaysOn
-                if store.alwaysOn {
-                    let rule = NEOnDemandRuleConnect()
-                    rule.interfaceTypeMatch = .any
-                    m.onDemandRules = [rule]
-                } else {
-                    m.onDemandRules = []
-                }
+                // 按需连接默认开，系统设置显示绿开关
+                m.isOnDemandEnabled = true
+                let rule = NEOnDemandRuleConnect()
+                rule.interfaceTypeMatch = .any
+                m.onDemandRules = [rule]
                 try await m.saveToPreferences()
                 try await m.loadFromPreferences()
                 attach(m)
