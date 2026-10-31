@@ -31,7 +31,12 @@ final class ProxyStore: ObservableObject {
 
     init() {
         if let d = Keychain.get(Self.key), let arr = try? JSONDecoder().decode([ProxyNode].self, from: d) {
-            nodes = arr
+            let fixed = arr.map(LinkParser.normalized)
+            nodes = fixed
+            let changed = zip(arr, fixed).contains { old, new in
+                old.server != new.server || old.secret != new.secret || old.port != new.port
+            }
+            if changed { save() }
         }
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
@@ -94,14 +99,38 @@ final class ProxyStore: ObservableObject {
         for n in list { add(n) }
     }
 
+    /// Rewrite saved nodes whose server is still a base64 share blob. Clears a stale probe when the address changes.
+    func normalizeDecodedNodes() {
+        var next = nodes
+        var changed = false
+        for index in next.indices {
+            let fixed = LinkParser.normalized(next[index])
+            if fixed.server != next[index].server || fixed.secret != next[index].secret || fixed.port != next[index].port {
+                results[fixed.id] = nil
+                next[index] = fixed
+                changed = true
+            }
+        }
+        if changed { nodes = next }
+    }
+
     func update(_ node: ProxyNode) {
         if let i = nodes.firstIndex(where: { $0.id == node.id }) { nodes[i] = node }
     }
 
     func remove(_ node: ProxyNode) {
-        nodes.removeAll { $0.id == node.id }
-        results[node.id] = nil
-        if selectedID == node.id { selectedID = nodes.first?.id }
+        _ = removeIDs([node.id])
+    }
+
+    /// 删掉这批节点并写回持久化。返回值表示当前选中节点被删掉了。
+    @discardableResult
+    func removeIDs(_ ids: Set<UUID>) -> Bool {
+        let hitActive = selectedID.map { ids.contains($0) } ?? false
+        guard !ids.isEmpty else { return false }
+        nodes.removeAll { ids.contains($0.id) }
+        for id in ids { results[id] = nil }
+        if hitActive { selectedID = nodes.first?.id }
+        return hitActive
     }
 
     func removeAll() {
@@ -110,23 +139,26 @@ final class ProxyStore: ObservableObject {
         results = [:]
     }
 
+    /// 节点列表始终显示直连 TCP 延迟（与 main 一致）。
+    /// `vpnConnected` 保留给旧调用点，但不再改成 sing-box 代理探测，避免几百个节点把隧道打满。
     func refreshLatency(vpnConnected: Bool) async {
+        _ = vpnConnected
         if isRefreshing || nodes.isEmpty { return }
         isRefreshing = true
         refreshError = nil
         defer { isRefreshing = false }
-        if vpnConnected {
-            let usable = nodes.filter(SingBoxConfig.isSupported)
-            do {
-                results = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
-            } catch {
-                refreshError = error.localizedDescription
-                var failed: [UUID: ProxyProbeResult] = [:]
-                for n in nodes { failed[n.id] = .probeFailed }
-                results = failed
-            }
-        } else {
-            results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+    }
+
+    /// 可选的代理 HTTPS 探测。不写入 `results`，因此不会盖掉 TCP 毫秒。
+    func refreshProxyLatency() async -> String? {
+        let usable = nodes.filter(SingBoxConfig.isSupported)
+        do {
+            let probed = try await ProxyLatencyTester.measureViaSingBox(nodes: usable, controlURL: SingBoxConfig.controlURL)
+            let ok = probed.values.filter(\.isReachable).count
+            return "代理探测 \(ok)/\(probed.count)"
+        } catch {
+            return error.localizedDescription
         }
     }
 }

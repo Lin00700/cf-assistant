@@ -167,10 +167,14 @@ enum SingBoxConfig {
             }
         }
 
-        // sniff 提取 TLS SNI / HTTP Host，域名规则才能匹配
+        // sniff 必须包含 dns。只嗅 tls/http/quic 时，发往 172.19.0.2:53 的查询
+        // 不会被标成 protocol=dns，接着被 ip_is_private 直接送出，系统 DNS 就会空等 30 秒。
         var routeRules: [[String: Any]] = [
-            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic"]],
+            ["action": "sniff", "timeout": "500ms", "sniffer": ["tls", "http", "quic", "dns"]],
+            ["ip_cidr": ["223.5.5.5/32", "8.8.8.8/32"], "outbound": "direct"],
             ["protocol": "dns", "action": "hijack-dns"],
+            ["ip_cidr": ["172.19.0.2/32", "127.0.0.1/32"], "port": 53, "action": "hijack-dns"],
+            ["port": 53, "action": "hijack-dns"],
             ["ip_is_private": true, "outbound": "direct"]
         ]
 
@@ -210,15 +214,20 @@ enum SingBoxConfig {
             }
         }
 
+        // Some mobile networks time out UDP/53 while allowing direct TCP/443.
+        // Use the literal Cloudflare IP to avoid a DNS bootstrap loop; keep this
+        // resolver on the direct outbound for local/domestic DNS rules.
+        // Do not exclude 1.1.1.1 globally: direct sockets are bound to the physical
+        // interface by TunnelPlatform, so ordinary app traffic keeps its policy.
         let dnsServers: [[String: Any]] = [
-            ["tag": "dns-local",  "address": "udp://223.5.5.5", "detour": "direct"],
+            ["tag": "dns-local",  "address": "https://1.1.1.1/dns-query", "detour": "direct"],
             ["tag": "dns-backup", "address": "udp://8.8.8.8",   "detour": "direct"],
             ["tag": "dns-remote", "address": "tls://8.8.8.8",   "detour": "proxy"]
         ]
         let dns: [String: Any] = [
             "servers": dnsServers,
             "rules": dnsRules,
-            "final": "dns-remote",
+            "final": "dns-local",
             "strategy": "prefer_ipv4",
             "independent_cache": true
         ]
@@ -240,7 +249,7 @@ enum SingBoxConfig {
         let route: [String: Any] = [
             "rules": routeRules,
             "final": "proxy",
-            "auto_detect_interface": false
+            "auto_detect_interface": true
         ]
         let log: [String: Any] = ["level": "info", "timestamp": true]
         let clash: [String: Any] = ["external_controller": "127.0.0.1:\(controlPort)"]
