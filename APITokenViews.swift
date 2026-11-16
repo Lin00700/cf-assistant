@@ -120,15 +120,8 @@ struct APITokenDetailView: View {
                         LabeledContent("创建", value: String(i.prefix(10)))
                     }
                 }
-                ForEach(Array((token["policies"]?.array ?? []).enumerated()), id: \.offset) { idx, p in
-                    Section("权限策略 \(idx + 1)（\(p["effect"]?.description == "allow" ? "允许" : "拒绝")）") {
-                        ForEach(Array((p["permission_groups"]?.array ?? []).enumerated()), id: \.offset) { _, g in
-                            Text(g["name"]?.description ?? "").font(.subheadline)
-                        }
-                        ForEach(p["resources"]?.object.keys.sorted() ?? [], id: \.self) { k in
-                            Text(k).font(.caption2).foregroundColor(.secondary)
-                        }
-                    }
+                ForEach(Array((token["policies"]?.array ?? []).enumerated()), id: \.offset) { idx, policy in
+                    TokenPolicySection(index: idx, policy: policy)
                 }
             }
             .navigationTitle("Token 详情")
@@ -139,6 +132,26 @@ struct APITokenDetailView: View {
 }
 
 // MARK: - 创建
+
+private struct TokenPolicySection: View {
+    let index: Int
+    let policy: JSONValue
+
+    private var effect: String { policy["effect"]?.description == "allow" ? "允许" : "拒绝" }
+    private var groups: [JSONValue] { policy["permission_groups"]?.array ?? [] }
+    private var resources: [String] { policy["resources"]?.object.keys.sorted() ?? [] }
+
+    var body: some View {
+        Section("权限策略 \(index + 1)（\(effect)）") {
+            ForEach(Array(groups.enumerated()), id: \.offset) { _, group in
+                Text(group["name"]?.description ?? "").font(.subheadline)
+            }
+            ForEach(resources, id: \.self) { key in
+                Text(key).font(.caption2).foregroundColor(.secondary)
+            }
+        }
+    }
+}
 
 struct PermGroup: Identifiable, Hashable {
     let id: String

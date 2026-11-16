@@ -2,8 +2,12 @@ name: Build iOS IPA
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'cursor/**' ]
   workflow_dispatch: # 允许手动触发
+
+concurrency:
+  group: ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

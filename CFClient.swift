@@ -224,6 +224,7 @@ final class Session: ObservableObject {
     @Published var accountId: String = ""
 
     init() {
+        accountId = UserDefaults.standard.string(forKey: "cf.accountId") ?? ""
         if let c = Credentials.load() {
             let cl = CFClient(c)
             client = cl
@@ -231,10 +232,23 @@ final class Session: ObservableObject {
         }
     }
 
+    func selectAccount(_ id: String) {
+        guard accounts.contains(where: { $0.id == id }) else { return }
+        accountId = id
+        UserDefaults.standard.set(id, forKey: "cf.accountId")
+    }
+
+    private func rememberAccount() {
+        if !accountId.isEmpty {
+            UserDefaults.standard.set(accountId, forKey: "cf.accountId")
+        }
+    }
+
     private func refreshAccounts(_ cl: CFClient) async {
         if let accs: [Account] = try? await cl.get("accounts"), let first = accs.first {
             accounts = accs
             if accountId.isEmpty || !accs.contains(where: { $0.id == accountId }) { accountId = first.id }
+            rememberAccount()
         }
     }
 
@@ -245,11 +259,13 @@ final class Session: ObservableObject {
         creds.save()
         accounts = accs
         accountId = first.id
+        rememberAccount()
         client = cl
     }
 
     func logout() {
         Credentials.clear()
+        UserDefaults.standard.removeObject(forKey: "cf.accountId")
         client = nil
         accounts = []
         accountId = ""

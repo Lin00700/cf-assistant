@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Network
 import NetworkExtension
 import Libbox
@@ -94,7 +95,52 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
+        let command = String(data: messageData, encoding: .utf8) ?? ""
+        if command == "dns" {
+            Task {
+                let text = await Self.lookupCloudflareViaSingBox()
+                completionHandler?(Data(text.utf8))
+            }
+            return
+        }
         completionHandler?(Data(TunnelLog.shared.text().utf8))
+    }
+
+    /// Ask the in-process sing-box DNS router. This does not use the system resolver,
+    /// so a success here with a system DNS timeout means hijack failed, not the upstream.
+    private static func lookupCloudflareViaSingBox() async -> String {
+        let started = Date()
+        guard var components = URLComponents(string: "http://127.0.0.1:9090/dns/query") else {
+            return "FAIL 无法构造 sing-box DNS 请求"
+        }
+        components.queryItems = [
+            URLQueryItem(name: "name", value: "cloudflare.com"),
+            URLQueryItem(name: "type", value: "A")
+        ]
+        guard let url = components.url else { return "FAIL 无法构造 sing-box DNS 请求" }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(code),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                let body = String(data: data.prefix(180), encoding: .utf8) ?? ""
+                return "FAIL \(ms) ms HTTP \(code) \(body)"
+            }
+            let status = obj["Status"] as? Int ?? -1
+            let answers = (obj["Answer"] as? [[String: Any]]) ?? []
+            let ips = answers.compactMap { ($0["data"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if ips.isEmpty {
+                return "FAIL \(ms) ms sing-box DNS 无 A 记录 Status=\(status)"
+            }
+            return "OK \(ms) ms \(ips.joined(separator: " "))"
+        } catch {
+            let ms = Int(Date().timeIntervalSince(started) * 1000)
+            return "FAIL \(ms) ms \(error.localizedDescription)"
+        }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason) async {
@@ -109,8 +155,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
     private unowned let tunnel: NEPacketTunnelProvider
     private var monitor: NWPathMonitor?
+    private let ifaceLock = NSLock()
     private var lastIfaceName: String = ""
     private var lastIfaceIndex: Int32 = -1
+    private var loggedBindFailure = false
 
     init(_ tunnel: NEPacketTunnelProvider) {
         self.tunnel = tunnel
@@ -129,22 +177,21 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
         settings.mtu = NSNumber(value: options.getMTU())
 
-        // Libbox 1.11 exposes the TUN DNS-hijack address as a single StringBox.
-        // Send system DNS there so sing-box can apply its DNS rules.
+        // Libbox 1.11 returns the next address after 172.19.0.1/30, which is 172.19.0.2.
+        // iOS sends every system lookup there; sing-box hijacks port 53 on that address.
         var dnsServers: [String] = []
         if let dnsServer = try? options.getDNSServerAddress().value,
            !dnsServer.isEmpty {
             dnsServers = [dnsServer]
-        }
-        if !dnsServers.isEmpty {
-            let dnsSettings = NEDNSSettings(servers: dnsServers)
-            dnsSettings.matchDomains = [""]
-            dnsSettings.matchDomainsNoSearch = true
-            settings.dnsSettings = dnsSettings
-            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServers.joined(separator: ","))")
+            TunnelLog.shared.add("[ext] DNS servers from Libbox: \(dnsServer)")
         } else {
-            TunnelLog.shared.add("[ext] Libbox DNS address unavailable")
+            dnsServers = ["172.19.0.2"]
+            TunnelLog.shared.add("[ext] Libbox DNS address unavailable, fallback 172.19.0.2")
         }
+        let dnsSettings = NEDNSSettings(servers: dnsServers)
+        dnsSettings.matchDomains = [""]
+        dnsSettings.matchDomainsNoSearch = true
+        settings.dnsSettings = dnsSettings
 
         var v4Addr: [String] = []
         var v4Mask: [String] = []
@@ -173,6 +220,10 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         if ipv4Routes.isEmpty {
             ipv4Routes = [NEIPv4Route.default()]
         }
+        for server in dnsServers {
+            Self.appendHostRoute(server, to: &ipv4Routes)
+        }
+        Self.appendHostRoute("172.19.0.2", to: &ipv4Routes)
         v4.includedRoutes = ipv4Routes
 
         var ipv4Exclude: [NEIPv4Route] = []
@@ -183,9 +234,10 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
                 }
             }
         }
+        ipv4Exclude.removeAll { $0.destinationAddress == "172.19.0.2" }
         v4.excludedRoutes = ipv4Exclude
         settings.ipv4Settings = v4
-        TunnelLog.shared.add("[ext] IPv4 routes included=\(ipv4Routes.count) excluded=\(ipv4Exclude.count)")
+        TunnelLog.shared.add("[ext] IPv4 routes included=\(ipv4Routes.count) excluded=\(ipv4Exclude.count) dns=\(dnsServers.joined(separator: ","))")
 
         var v6Addr: [String] = []
         var v6Prefixes: [NSNumber] = []
@@ -248,8 +300,36 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         }
     }
 
-    func usePlatformAutoDetectControl() -> Bool { false }
-    func autoDetectControl(_ fd: Int32) throws {}
+    func usePlatformAutoDetectControl() -> Bool { true }
+
+    /// Bind direct sockets (dns-local 223.5.5.5, node dial) to the physical interface.
+    /// auto_detect_interface alone does not bind while a platform interface is present.
+    func autoDetectControl(_ fd: Int32) throws {
+        ifaceLock.lock()
+        let index = lastIfaceIndex
+        ifaceLock.unlock()
+        guard index > 0 else { return }
+        var value = UInt32(index)
+        let len = socklen_t(MemoryLayout.size(ofValue: value))
+        let v4 = setsockopt(fd, IPPROTO_IP, IP_BOUND_IF, &value, len)
+        let v6 = setsockopt(fd, IPPROTO_IPV6, IPV6_BOUND_IF, &value, len)
+        if v4 != 0 && v6 != 0 {
+            ifaceLock.lock()
+            let shouldLog = !loggedBindFailure
+            loggedBindFailure = true
+            ifaceLock.unlock()
+            if shouldLog {
+                TunnelLog.shared.add("[ext] 绑定物理网卡 index=\(index) 失败 errno=\(errno)")
+            }
+        }
+    }
+
+    private static func appendHostRoute(_ address: String, to routes: inout [NEIPv4Route]) {
+        let parts = address.split(separator: ".")
+        guard parts.count == 4, parts.allSatisfy({ Int($0).map { (0...255).contains($0) } ?? false }) else { return }
+        if routes.contains(where: { $0.destinationAddress == address }) { return }
+        routes.append(NEIPv4Route(destinationAddress: address, subnetMask: "255.255.255.255"))
+    }
 
     func findConnectionOwner(_ ipProtocol: Int32, sourceAddress: String?, sourcePort: Int32,
                              destinationAddress: String?, destinationPort: Int32,
@@ -279,17 +359,24 @@ final class TunnelPlatform: NSObject, LibboxPlatformInterfaceProtocol {
         m.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             if path.status == .unsatisfied {
+                self.ifaceLock.lock()
                 self.lastIfaceName = ""
                 self.lastIfaceIndex = -1
+                self.ifaceLock.unlock()
                 listener?.updateDefaultInterface("", interfaceIndex: -1, isExpensive: false, isConstrained: false)
                 return
             }
             guard let iface = Self.pickInterface(from: path) else { return }
             let name = iface.name
             let index = Int32(iface.index)
-            if name == self.lastIfaceName && index == self.lastIfaceIndex { return }
-            self.lastIfaceName = name
-            self.lastIfaceIndex = index
+            self.ifaceLock.lock()
+            let unchanged = name == self.lastIfaceName && index == self.lastIfaceIndex
+            if !unchanged {
+                self.lastIfaceName = name
+                self.lastIfaceIndex = index
+            }
+            self.ifaceLock.unlock()
+            if unchanged { return }
             TunnelLog.shared.add("[ext] 默认网卡 \(name) index=\(index)")
             listener?.updateDefaultInterface(name, interfaceIndex: index,
                                              isExpensive: path.isExpensive, isConstrained: path.isConstrained)

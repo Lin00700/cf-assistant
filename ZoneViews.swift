@@ -23,6 +23,9 @@ struct ZoneDetailView: View {
                 NavigationLink { EmailRoutingView(zone: zone) } label: {
                     Label("邮件路由", systemImage: "envelope")
                 }
+                NavigationLink { ZoneCatalogView(zone: zone) } label: {
+                    Label("规则、WAF 与更多", systemImage: "shield.lefthalf.filled")
+                }
             }
             Section("信息") {
                 LabeledContent("状态", value: zone.status == "active" ? "已启用" : (zone.status ?? "-"))

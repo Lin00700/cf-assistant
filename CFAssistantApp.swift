@@ -23,8 +23,10 @@ struct CFAssistantApp: App {
                 .environmentObject(session)
                 .tint(skin.accent)
                 .id("\(session.accountId)-\(skinRaw)")
+                .onAppear { InkChrome.apply() }
+                .onChange(of: skinRaw) { _ in InkChrome.apply() }
             }
-            .preferredColorScheme(skin.isDark ? .dark : .light)
+            .preferredColorScheme(skin.lockedScheme)
         }
     }
 }

@@ -28,26 +28,83 @@ struct DNSBody: Encodable {
 
 struct ZonesView: View {
     @EnvironmentObject var session: Session
+    @State private var query = ""
+    @State private var creating = false
 
     var body: some View {
         let ctx = session.ctx
         LoadView(load: { () async throws -> [Zone] in
             try await ctx.c.get("zones", query: ["per_page": "50"])
         }) { zones, reload in
-            List(zones) { z in
+            let shown = zones.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+            List(shown) { z in
                 NavigationLink(value: z) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(z.name).font(.headline)
                         Text(z.status ?? "").font(.caption).foregroundColor(.secondary)
                     }
                 }
+                .contextMenu {
+                    Button("复制域名") { UIPasteboard.general.string = z.name }
+                    Button("复制 Zone ID") { UIPasteboard.general.string = z.id }
+                }
             }
             .scrollContentBackground(.hidden)
-            .overlay { if zones.isEmpty { EmptyHint(text: "没有域名") } }
+            .searchable(text: $query, prompt: "搜索域名")
+            .overlay { if shown.isEmpty { EmptyHint(text: zones.isEmpty ? "没有域名" : "没有匹配的域名") } }
             .refreshable { await reload() }
             .navigationDestination(for: Zone.self) { ZoneDetailView(zone: $0) }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                }
+            }
+            .sheet(isPresented: $creating) { ZoneCreateSheet { Task { await reload() } } }
         }
         .navigationTitle("域名")
+    }
+}
+
+struct ZoneCreateSheet: View {
+    @EnvironmentObject var session: Session
+    @Environment(\.dismiss) private var dismiss
+    var onCreated: () -> Void
+    @State private var name = ""
+    @State private var kind = "full"
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("example.com", text: $name)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Picker("接入方式", selection: $kind) {
+                    Text("完整（Cloudflare DNS）").tag("full")
+                    Text("CNAME 设置").tag("partial")
+                }
+                if let error { Text(error).font(.footnote).foregroundColor(.red) }
+            }
+            .navigationTitle("添加站点")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("添加") { Task { await go() } }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func go() async {
+        let body: [String: Any] = [
+            "name": name.trimmingCharacters(in: .whitespacesAndNewlines),
+            "account": ["id": session.accountId],
+            "type": kind
+        ]
+        do {
+            _ = try await session.ctx.c.resultValue("POST", "zones", body: try jsonBody(body))
+            onCreated(); dismiss()
+        } catch { self.error = error.localizedDescription }
     }
 }
 

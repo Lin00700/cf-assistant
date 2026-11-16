@@ -13,6 +13,20 @@ struct LoginView: View {
         NavigationStack {
             Form {
                 Section {
+                    InkBanner(height: 168) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("云上站点，尽在掌中")
+                                .font(.custom("SongtiSC-Bold", size: 22, relativeTo: .title3))
+                                .foregroundColor(InkTheme.ink)
+                            Text("水墨云图 · Cloudflare")
+                                .font(.subheadline)
+                                .foregroundColor(InkTheme.inkSoft)
+                        }
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+                Section {
                     Picker("登录方式", selection: $mode) {
                         Text("API Token").tag(Credentials.Mode.token)
                         Text("邮箱 + Global Key").tag(Credentials.Mode.globalKey)
@@ -73,44 +87,73 @@ struct LoginView: View {
 
 struct RootView: View {
     @EnvironmentObject var session: Session
+    @Environment(\.colorScheme) private var scheme
     @AppStorage("appearance.chineseSkin") private var skinRaw = ChineseSkin.ink.rawValue
 
     private var skin: ChineseSkin {
         ChineseSkin(rawValue: skinRaw) ?? .ink
     }
 
+    private var darkChrome: Bool {
+        skin.isDark || (skin == .ink && scheme == .dark)
+    }
+
+    @State private var tab = 0
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
             NavigationStack { OverviewView() }
                 .chineseNavigationChrome()
-                .tabItem { Label("概览", systemImage: "square.grid.2x2.fill") }
+                .tabItem { Label("首页", systemImage: "square.grid.2x2.fill") }
+                .tag(0)
             NavigationStack { ZonesView() }
                 .chineseNavigationChrome()
                 .tabItem { Label("域名", systemImage: "globe") }
-            NavigationStack { DeveloperView() }
+                .tag(1)
+            NavigationStack { ProductsView() }
                 .chineseNavigationChrome()
-                .tabItem { Label("开发者", systemImage: "chevron.left.forwardslash.chevron.right") }
-            NavigationStack { StorageView() }
+                .tabItem { Label("产品", systemImage: "square.stack.3d.up.fill") }
+                .tag(2)
+            NavigationStack { VPNDashboardView() }
                 .chineseNavigationChrome()
-                .tabItem { Label("存储", systemImage: "externaldrive.fill") }
-            NavigationStack { AIChatView() }
+                .tabItem { Label("VPN", systemImage: "lock.shield.fill") }
+                .tag(3)
+            NavigationStack { MeView() }
                 .chineseNavigationChrome()
-                .tabItem { Label("AI", systemImage: "sparkles") }
-            NavigationStack { MoreView() }
-                .chineseNavigationChrome()
-                .tabItem { Label("设置", systemImage: "gearshape.fill") }
+                .tabItem { Label("我的", systemImage: "person.crop.circle.fill") }
+                .tag(4)
         }
+        .modifier(VPNHomeBallOverlay(tab: $tab))
         .tint(skin.accent)
-        .toolbarBackground(skin.paper.opacity(0.96), for: .tabBar)
+        .toolbarBackground(InkTheme.paper.opacity(0.96), for: .tabBar)
         .toolbarBackground(.visible, for: .tabBar)
-        .toolbarColorScheme(skin.isDark ? .dark : .light, for: .tabBar)
+        .toolbarColorScheme(darkChrome ? .dark : .light, for: .tabBar)
         .id("\(session.accountId)-\(skinRaw)")
+    }
+}
+
+private struct VPNHomeBallOverlay: ViewModifier {
+    @Binding var tab: Int
+
+    func body(content: Content) -> some View {
+        #if VPN_BUILD
+        content.overlay(alignment: .topLeading) {
+            if tab == 0 {
+                VPNFloatBall(container: UIScreen.main.bounds.size) { tab = 3 }
+            }
+        }
+        #else
+        content
+        #endif
     }
 }
 
 struct DeveloperView: View {
     var body: some View {
         List {
+            NavigationLink { VPNDashboardView() } label: {
+                Label("连接仪表盘", systemImage: "globe")
+            }
             NavigationLink { ProxyHomeView() } label: {
                 Label("VPN 与代理节点", systemImage: "lock.shield.fill")
             }
@@ -132,37 +175,47 @@ struct DeveloperView: View {
     }
 }
 
-struct MoreView: View {
+struct MeView: View {
     @EnvironmentObject var session: Session
 
     var body: some View {
         List {
-            Section {
-                NavigationLink { AppearanceSettingsView() } label: {
-                    Label("背景与主题", systemImage: "paintpalette.fill")
-                }
-                NavigationLink { APITokensView() } label: {
-                    Label("API Token", systemImage: "key.fill")
+            if session.accounts.count > 1 {
+                Section("切换账户") {
+                    Picker("账户", selection: Binding(
+                        get: { session.accountId },
+                        set: { session.selectAccount($0) }
+                    )) {
+                        ForEach(session.accounts) { account in
+                            Text(account.name).tag(account.id)
+                        }
+                    }
                 }
             }
+            Section("账户") {
+                NavigationLink { AccountHomeView() } label: { Label("账户主页", systemImage: "person.text.rectangle") }
+                NavigationLink { MembersView() } label: { Label("成员", systemImage: "person.2") }
+                NavigationLink { BillingOverviewView() } label: { Label("账单", systemImage: "creditcard") }
+                NavigationLink { AuditLogView() } label: { Label("审计日志", systemImage: "list.clipboard") }
+                NavigationLink { AlertPoliciesView() } label: { Label("通知", systemImage: "bell") }
+                NavigationLink { APITokensView() } label: { Label("API Token", systemImage: "key.fill") }
+                NavigationLink { IPAccessRulesView(zoneID: nil) } label: { Label("账户 IP 规则", systemImage: "shield") }
+            }
+            Section("外观") {
+                NavigationLink { AppearanceSettingsView() } label: { Label("背景与主题", systemImage: "paintpalette.fill") }
+            }
+            Section("智能") {
+                NavigationLink { AIChatView() } label: { Label("AI 对话", systemImage: "sparkles") }
+                NavigationLink { AISettingsView() } label: { Label("AI 设置", systemImage: "slider.horizontal.3") }
+            }
             Section {
-                Button(role: .destructive) {
-                    session.logout()
-                } label: {
+                Button(role: .destructive) { session.logout() } label: {
                     Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                 }
             }
         }
         .scrollContentBackground(.hidden)
-        .navigationTitle("设置")
+        .navigationTitle("我的")
     }
 }
 
-extension View {
-    func chineseNavigationChrome() -> some View {
-        self
-            .toolbarBackground(InkTheme.paper.opacity(0.96), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarColorScheme(ChineseSkin.current.isDark ? .dark : .light, for: .navigationBar)
-    }
-}

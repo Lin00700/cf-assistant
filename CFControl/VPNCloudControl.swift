@@ -15,8 +15,13 @@ struct VPNCloudControl: ControlWidget {
 
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: Self.kind, provider: VPNCloudValueProvider()) { isOn in
-            ControlWidgetToggle("云朵", isOn: isOn, action: ToggleVPNIntent()) { on in
+            // 图库预览用静态 Label 的 SF Symbol；开关状态再用 valueLabel 换图标。
+            ControlWidgetToggle(isOn: isOn, action: ToggleVPNIntent()) {
+                Label("云朵", systemImage: "cloud")
+                    .tint(Color(red: 0.78, green: 0.16, blue: 0.14))
+            } valueLabel: { on in
                 Label(on ? "已开" : "已关", systemImage: on ? "cloud.fill" : "cloud")
+                    .tint(Color(red: 0.78, green: 0.16, blue: 0.14))
             }
         }
         .displayName("云朵")

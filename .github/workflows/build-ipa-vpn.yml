@@ -1,7 +1,13 @@
 name: Build IPA with VPN
 
 on:
+  push:
+    branches: [ main, 'cursor/**' ]
   workflow_dispatch:
+
+concurrency:
+  group: ipa-vpn-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -34,6 +40,40 @@ jobs:
 
       - name: Generate Xcode project
         run: xcodegen generate --spec project-vpn.yml
+
+      - name: Validate generated sing-box DNS configuration
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/main.swift" <<'SWIFT'
+          import Foundation
+          let node = ProxyNode(name: "config-check", proto: "ss", server: "192.0.2.1", port: 443,
+                               secret: "test-only", params: ["method": "aes-128-gcm"])
+          let text = SingBoxConfig.build(nodes: [node], selectedID: node.id, mode: .manual,
+                                         bypassCN: true, rules: [])
+          let root = try JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any]
+          let dns = root["dns"] as! [String: Any]
+          let servers = dns["servers"] as! [[String: Any]]
+          precondition(dns["final"] as? String == "dns-local")
+          precondition(servers.contains { $0["tag"] as? String == "dns-local" && $0["address"] as? String == "https://1.1.1.1/dns-query" && $0["detour"] as? String == "direct" })
+          precondition(servers.contains { $0["tag"] as? String == "dns-remote" && $0["detour"] as? String == "proxy" })
+          let route = root["route"] as! [String: Any]
+          let rules = route["rules"] as! [[String: Any]]
+          precondition(route["final"] as? String == "proxy")
+          let hijack = rules.firstIndex { $0["action"] as? String == "hijack-dns" && $0["port"] as? Int == 53 }!
+          let privateRoute = rules.firstIndex { $0["ip_is_private"] as? Bool == true }!
+          precondition(hijack < privateRoute)
+          precondition(!rules.contains { ($0["ip_cidr"] as? [String])?.contains("1.1.1.1/32") == true && $0["outbound"] as? String == "direct" })
+          let tun = (root["inbounds"] as! [[String: Any]])[0]
+          let excludes = tun["inet4_route_exclude_address"] as! [String]
+          precondition(excludes.contains("192.0.2.1/32") && !excludes.contains("1.1.1.1/32"))
+          let outbounds = root["outbounds"] as! [[String: Any]]
+          precondition(outbounds.contains { $0["type"] as? String == "shadowsocks" && $0["server"] as? String == node.server && $0["server_port"] as? Int == node.port && $0["password"] as? String == node.secret })
+          FileHandle.standardOutput.write(Data(text.utf8))
+          SWIFT
+          swiftc ProxyNodes.swift SingBoxConfig.swift "$RUNNER_TEMP/main.swift" -o "$RUNNER_TEMP/config-check"
+          "$RUNNER_TEMP/config-check" > "$RUNNER_TEMP/sing-box-dns-check.json"
+          cd "$RUNNER_TEMP/sing-box"
+          go run -tags with_clash_api ./cmd/sing-box check -c "$RUNNER_TEMP/sing-box-dns-check.json"
 
       - name: Build and Archive
         run: |

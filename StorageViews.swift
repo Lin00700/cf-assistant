@@ -8,6 +8,8 @@ struct StorageView: View {
             NavigationLink { KVNamespacesView() } label: { Label("KV 命名空间", systemImage: "key") }
             NavigationLink { D1DatabasesView() } label: { Label("D1 数据库", systemImage: "cylinder") }
             NavigationLink { R2BucketsView() } label: { Label("R2 存储桶", systemImage: "shippingbox") }
+            NavigationLink { RemoteListView(source: .account(.hyperdrive)) } label: { Label("Hyperdrive", systemImage: "arrow.triangle.branch") }
+            NavigationLink { RemoteListView(source: .account(.vectorize)) } label: { Label("Vectorize", systemImage: "square.grid.3x3") }
         }
         .scrollContentBackground(.hidden)
         .navigationTitle("存储")
@@ -21,6 +23,7 @@ struct KVKey: Decodable, Identifiable { let name: String; var id: String { name 
 
 struct KVNamespacesView: View {
     @EnvironmentObject var session: Session
+    @State private var creating = false
 
     var body: some View {
         let ctx = session.ctx
@@ -32,6 +35,18 @@ struct KVNamespacesView: View {
             }
             .overlay { if items.isEmpty { EmptyHint(text: "没有 KV 命名空间") } }
             .refreshable { await reload() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                }
+            }
+            .sheet(isPresented: $creating) {
+                NameCreateSheet(title: "新建 KV") { name in
+                    _ = try await session.ctx.c.resultValue(
+                        "POST", "accounts/\(session.ctx.acc)/storage/kv/namespaces",
+                        body: try jsonBody(["title": name]))
+                } onDone: { Task { await reload() } }
+            }
         }
         .navigationTitle("KV")
     }
@@ -194,6 +209,8 @@ struct D1QueryBody: Encodable { let sql: String }
 
 struct D1DatabasesView: View {
     @EnvironmentObject var session: Session
+    @State private var creating = false
+    @State private var error: String?
 
     var body: some View {
         let ctx = session.ctx
@@ -202,11 +219,32 @@ struct D1DatabasesView: View {
         }) { items, reload in
             List(items) { db in
                 NavigationLink(db.name) { D1QueryView(db: db) }
+                    .swipeActions {
+                        Button("删除", role: .destructive) {
+                            Task {
+                                do {
+                                    try await ctx.c.deleteLoose("accounts/\(ctx.acc)/d1/database/\(db.uuid)")
+                                    await reload()
+                                } catch { self.error = error.localizedDescription }
+                            }
+                        }
+                    }
             }
             .overlay { if items.isEmpty { EmptyHint(text: "没有 D1 数据库") } }
             .refreshable { await reload() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                }
+            }
+            .sheet(isPresented: $creating) {
+                NameCreateSheet(title: "新建 D1") { name in
+                    _ = try await ctx.c.resultValue("POST", "accounts/\(ctx.acc)/d1/database", body: try jsonBody(["name": name]))
+                } onDone: { Task { await reload() } }
+            }
         }
         .navigationTitle("D1")
+        .errorAlert($error)
     }
 }
 
@@ -278,6 +316,7 @@ struct R2BucketList: Decodable { let buckets: [R2Bucket] }
 struct R2BucketsView: View {
     @EnvironmentObject var session: Session
     @State private var error: String?
+    @State private var creating = false
 
     var body: some View {
         let ctx = session.ctx
@@ -286,10 +325,12 @@ struct R2BucketsView: View {
             return list.buckets
         }) { items, reload in
             List(items) { b in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(b.name).font(.headline)
-                    if let d = b.creation_date {
-                        Text("创建于 \(d.prefix(10))").font(.caption).foregroundColor(.secondary)
+                NavigationLink { R2ObjectsView(bucket: b.name) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(b.name).font(.headline)
+                        if let d = b.creation_date {
+                            Text("创建于 \(d.prefix(10))").font(.caption).foregroundColor(.secondary)
+                        }
                     }
                 }
                 .swipeActions {
@@ -305,6 +346,16 @@ struct R2BucketsView: View {
             }
             .overlay { if items.isEmpty { EmptyHint(text: "没有 R2 存储桶") } }
             .refreshable { await reload() }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button { creating = true } label: { Image(systemName: "plus") }
+                }
+            }
+            .sheet(isPresented: $creating) {
+                NameCreateSheet(title: "新建存储桶") { name in
+                    _ = try await ctx.c.resultValue("POST", "accounts/\(ctx.acc)/r2/buckets", body: try jsonBody(["name": name]))
+                } onDone: { Task { await reload() } }
+            }
         }
         .navigationTitle("R2")
         .errorAlert($error)
