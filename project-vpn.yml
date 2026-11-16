@@ -19,10 +19,13 @@ targets:
     dependencies:
       - target: CFTunnel
         embed: true
+      - target: CFControl
+        embed: true
     info:
       path: CFAssistant-Info.plist
       properties:
         NSLocalNetworkUsageDescription: "连接诊断会测试您输入的局域网 IP 和端口，仅用于测量 TCP 连通性。"
+        NSCameraUsageDescription: "扫描二维码导入节点时使用相机，只识别二维码，不会保存图片。"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
@@ -73,6 +76,33 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         OTHER_LDFLAGS: ["-lresolv"]
         SKIP_INSTALL: YES
+  CFControl:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: CFControl
+        includes: ["*.swift"]
+    entitlements:
+      path: CFControl.entitlements
+      properties:
+        com.apple.developer.networking.networkextension: [packet-tunnel-provider]
+    info:
+      path: CFControl-Info.plist
+      properties:
+        CFBundleDisplayName: 云朵
+        CFBundleShortVersionString: "1.1.0"
+        CFBundleVersion: "4"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cfassistant.ios.control
+        PRODUCT_NAME: CFControl
+        SWIFT_VERSION: "5.9"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
   ConfigParityTests:
     type: bundle.unit-test
     platform: iOS
@@ -92,6 +122,7 @@ schemes:
       targets:
         CFAssistant: all
         CFTunnel: all
+        CFControl: all
     test:
       targets:
         - ConfigParityTests

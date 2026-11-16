@@ -148,7 +148,8 @@ final class VPNManager: ObservableObject {
                 let config = SingBoxConfig.build(nodes: store.nodes, selectedID: store.selected?.id,
                                                  mode: store.selectionMode, bypassCN: store.bypassCN,
                                                  rules: store.routingRules,
-                                                 categoryPolicies: store.categoryPolicies)
+                                                 categoryPolicies: store.categoryPolicies,
+                                                 auto: store.autoPolicy)
                 let m = manager ?? NETunnelProviderManager()
                 let proto = NETunnelProviderProtocol()
                 proto.providerBundleIdentifier = extID

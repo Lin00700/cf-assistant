@@ -21,8 +21,16 @@ final class ProxyStore: ObservableObject {
     @Published var alwaysOn: Bool = false {
         didSet { UserDefaults.standard.set(alwaysOn, forKey: "vpn_always_on") }
     }
+    /// 自动优选（urltest）组的探测间隔与容差，改完自动重连生效。
+    @Published var autoIntervalMinutes: Int = 5 {
+        didSet { UserDefaults.standard.set(autoIntervalMinutes, forKey: "vpn_auto_interval") }
+    }
+    @Published var autoToleranceMilliseconds: Int = 50 {
+        didSet { UserDefaults.standard.set(autoToleranceMilliseconds, forKey: "vpn_auto_tolerance") }
+    }
     @Published var results: [UUID: ProxyProbeResult] = [:]
     @Published var isRefreshing = false
+    @Published var isFindingFastest = false
     @Published var refreshError: String?
 
     private static let key = "vpn.nodes"
@@ -41,6 +49,10 @@ final class ProxyStore: ObservableObject {
         if let s = UserDefaults.standard.string(forKey: "vpn_selected") { selectedID = UUID(uuidString: s) }
         bypassCN = UserDefaults.standard.object(forKey: "vpn_bypass") as? Bool ?? true
         alwaysOn = UserDefaults.standard.bool(forKey: "vpn_always_on")
+        let savedInterval = UserDefaults.standard.integer(forKey: "vpn_auto_interval")
+        if savedInterval > 0 { autoIntervalMinutes = savedInterval }
+        let savedTolerance = UserDefaults.standard.integer(forKey: "vpn_auto_tolerance")
+        if savedTolerance > 0 { autoToleranceMilliseconds = savedTolerance }
         if let raw = UserDefaults.standard.string(forKey: "vpn_mode"), let m = ProxySelectionMode(rawValue: raw) {
             selectionMode = m
         }
@@ -129,6 +141,12 @@ final class ProxyStore: ObservableObject {
         guard !ids.isEmpty else { return false }
         nodes.removeAll { ids.contains($0.id) }
         for id in ids { results[id] = nil }
+        // 被删掉的节点如果还当着别人的前置节点，把这些链拆掉，避免配置里出现悬空 detour。
+        for index in nodes.indices {
+            if let detour = nodes[index].detourID, ids.contains(detour) {
+                nodes[index].detourID = nil
+            }
+        }
         if hitActive { selectedID = nodes.first?.id }
         return hitActive
     }
@@ -148,6 +166,83 @@ final class ProxyStore: ObservableObject {
         refreshError = nil
         defer { isRefreshing = false }
         results = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+    }
+
+    var autoPolicy: SingBoxAutoPolicy {
+        SingBoxAutoPolicy(intervalMinutes: autoIntervalMinutes,
+                          toleranceMilliseconds: autoToleranceMilliseconds)
+    }
+
+    /// 前置节点链（前置 → …），用于界面显示；遇到环或缺失就截断。
+    func detourChain(for node: ProxyNode) -> [ProxyNode] {
+        SingBoxConfig.detourChain(nodes: nodes, node: node)
+    }
+
+    /// 节点标签：`前置 A → 落地 B`
+    func chainLabel(for node: ProxyNode) -> String? {
+        let chain = detourChain(for: node)
+        guard !chain.isEmpty else { return nil }
+        let names = chain.reversed().map(\.name) + [node.name]
+        return names.joined(separator: " → ")
+    }
+
+    /// 能不能把 candidate 当作 node 的前置节点：不能是自己，也不能构成环。
+    func canUseAsDetour(_ candidate: UUID, for nodeID: UUID) -> Bool {
+        guard candidate != nodeID else { return false }
+        var visited: Set<UUID> = [nodeID]
+        var current: UUID? = candidate
+        var depth = 0
+        while let id = current {
+            if !visited.insert(id).inserted { return false }
+            depth += 1
+            if depth > 8 { return false }
+            current = nodes.first(where: { $0.id == id })?.detourID
+        }
+        return true
+    }
+
+    /// 一键测速并切到最快节点。VPN 已连接时用 sing-box 的代理延迟，否则用 TCP 建连延迟。
+    @discardableResult
+    func testAllAndSelectFastest(vpnConnected: Bool) async -> ProxyNode? {
+        guard !nodes.isEmpty, !isFindingFastest else { return nil }
+        isFindingFastest = true
+        defer { isFindingFastest = false }
+
+        if vpnConnected {
+            let usable = nodes.filter(SingBoxConfig.isSupported)
+            if let probed = try? await ProxyLatencyTester.measureViaSingBox(nodes: usable,
+                                                                           controlURL: SingBoxConfig.controlURL),
+               !probed.isEmpty {
+                for (id, result) in probed { results[id] = result }
+                if let best = fastest(in: usable, results: probed) {
+                    selectedID = best.id
+                    return best
+                }
+            }
+        }
+        let direct = await ProxyLatencyTester.measureDirectTCP(nodes: nodes)
+        results = direct
+        guard let best = fastest(in: nodes, results: direct) else { return nil }
+        selectedID = best.id
+        return best
+    }
+
+    private func fastest(in list: [ProxyNode], results: [UUID: ProxyProbeResult]) -> ProxyNode? {
+        var bestNode: ProxyNode?
+        var bestMilliseconds = Int.max
+        for node in list {
+            guard let result = results[node.id] else { continue }
+            let milliseconds: Int
+            switch result {
+            case .latency(let value), .tcpLatency(let value): milliseconds = value
+            case .unreachable, .probeFailed, .requiresVPN: continue
+            }
+            if milliseconds < bestMilliseconds {
+                bestMilliseconds = milliseconds
+                bestNode = node
+            }
+        }
+        return bestNode
     }
 
     /// 可选的代理 HTTPS 探测。不写入 `results`，因此不会盖掉 TCP 毫秒。
