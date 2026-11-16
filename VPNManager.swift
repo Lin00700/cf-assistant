@@ -25,20 +25,55 @@ final class VPNManager: ObservableObject {
         }
     }
 
+    /// PlugIns 里同时有 CFTunnel.appex（packet-tunnel）和 CFControl.appex（WidgetKit 控件），
+    /// 不能取第一个 .appex，必须按 NSExtensionPointIdentifier 认出真正的隧道扩展。
+    /// 不写死 bundle id：重签工具可能改掉前缀。
     var extensionBundleID: String? {
         guard let dir = Bundle.main.builtInPlugInsURL,
               let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
         else { return nil }
-        for u in items where u.pathExtension == "appex" {
+        let appexes = items.filter { $0.pathExtension == "appex" }
+
+        // 1) 扩展点声明为 packet-tunnel 的那个
+        for u in appexes {
+            guard let bundle = Bundle(url: u),
+                  let id = bundle.bundleIdentifier,
+                  let ext = bundle.infoDictionary?["NSExtension"] as? [String: Any],
+                  let point = ext["NSExtensionPointIdentifier"] as? String,
+                  point == "com.apple.networkextension.packet-tunnel"
+            else { continue }
+            return id
+        }
+        // 2) 退回按名字 / bundle id 后缀认
+        for u in appexes where u.deletingPathExtension().lastPathComponent == "CFTunnel" {
             if let id = Bundle(url: u)?.bundleIdentifier { return id }
         }
+        for u in appexes {
+            if let id = Bundle(url: u)?.bundleIdentifier, id.hasSuffix(".tunnel") { return id }
+        }
         return nil
+    }
+
+    private func providerID(of m: NETunnelProviderManager) -> String? {
+        (m.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier
     }
 
     func load() async {
         do {
             let all = try await NETunnelProviderManager.loadAllFromPreferences()
-            if let m = all.first { attach(m) }
+            guard !all.isEmpty else { return }
+            let extID = extensionBundleID
+            let chosen = all.first { providerID(of: $0) == extID } ?? all.first!
+            // 旧版本可能把 CFControl.appex 当成 provider 存进了系统偏好；连之前顺手改正，
+            // 免得系统里一直留着一个指向 WidgetKit 控件的 VPN 配置。
+            if let extID, providerID(of: chosen) != extID,
+               let proto = chosen.protocolConfiguration as? NETunnelProviderProtocol {
+                proto.providerBundleIdentifier = extID
+                chosen.protocolConfiguration = proto
+                try? await chosen.saveToPreferences()
+                try? await chosen.loadFromPreferences()
+            }
+            attach(chosen)
         } catch {
             self.error = error.localizedDescription
         }
