@@ -447,7 +447,10 @@ struct NodeEditView: View {
                         }
                     }
                 }
-                Section("链式代理（前置节点）") {
+                Section {
+                    Text("链式代理（前置节点）")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                     Picker("前置节点", selection: $detourID) {
                         Text("不前置（直连落地）").tag(UUID?.none)
                         ForEach(detourCandidates) { candidate in
@@ -462,7 +465,10 @@ struct NodeEditView: View {
                 } footer: {
                     Text("选了前置节点后，流量先经过前置节点再到本节点（双跳）。不会列出会构成环的前置节点。")
                 }
-                Section("高级参数（每行 key=value）") {
+                Section {
+                    Text("高级参数（每行 key=value）")
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
                     TextEditor(text: $extraParams)
                         .frame(minHeight: 88)
                         .font(.caption.monospaced())
@@ -689,7 +695,10 @@ struct ImportNodesView: View {
 
     var body: some View {
         Form {
-            Section("粘贴内容") {
+            Section {
+                Text("粘贴内容")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
                 TextEditor(text: $text)
                     .frame(minHeight: 120)
                     .textInputAutocapitalization(.never)
